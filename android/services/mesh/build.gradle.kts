@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "org.sahara.core.testing"
+    namespace = "org.sahara.services.mesh"
     compileSdk = 34
 
     defaultConfig {
@@ -25,6 +25,11 @@ android {
 dependencies {
     implementation(project(":android:core:domain"))
     implementation(project(":android:core:data"))
-    implementation(libs.junit)
-    implementation(libs.kotlinx.coroutines.test)
+    implementation(project(":android:core:security"))
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.kotlinx.coroutines.core)
+
+    testImplementation(project(":android:core:testing"))
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

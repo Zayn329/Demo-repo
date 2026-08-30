@@ -53,6 +53,12 @@ dependencies {
     implementation(project(":android:core:domain"))
     implementation(project(":android:core:data"))
     implementation(project(":android:core:security"))
+    implementation(project(":android:services:detection"))
+    implementation(project(":android:services:evidence"))
+    implementation(project(":android:services:mesh"))
+    implementation(project(":android:features:incident"))
+    implementation(project(":android:features:panic"))
+    implementation(project(":android:features:notify-circle"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -63,6 +69,10 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+
+    testImplementation(project(":android:core:testing"))
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
