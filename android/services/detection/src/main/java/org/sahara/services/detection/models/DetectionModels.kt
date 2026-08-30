@@ -4,8 +4,8 @@ import org.sahara.core.domain.models.DetectorType
 
 data class DetectionConfig(
     val triggerWords: List<String> = listOf("help", "save me", "stop"),
-    val keywordConfidenceThreshold: Float = 0.50f,
-    val screamConfidenceThreshold: Float = 0.50f,
+    val keywordConfidenceThreshold: Float = 0.30f,
+    val screamConfidenceThreshold: Float = 0.30f,
     val motionGForceThreshold: Float = 2.0f,
     val signalCombinationRule: String = "KEYWORD OR (SCREAM AND MOTION)",
     val confirmationWindowSeconds: Int = 6

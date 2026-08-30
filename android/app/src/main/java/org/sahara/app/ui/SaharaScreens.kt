@@ -35,6 +35,7 @@ fun MainDashboardScreen(
     isMonitoringActive: Boolean,
     onToggleMonitoring: (Boolean) -> Unit,
     onPanicTriggered: () -> Unit,
+    onStopAndSealIncident: () -> Unit,
     incidentState: IncidentState,
     onOpenHelpDirectory: () -> Unit,
     onOpenVerifier: () -> Unit
@@ -115,20 +116,54 @@ fun MainDashboardScreen(
             }
         }
 
-        // Prominent Emergency Panic Button
-        Button(
-            onClick = onPanicTriggered,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(80.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-        ) {
-            Text(
-                text = "EMERGENCY PANIC",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+        // Prominent Emergency Panic & Seal Controls
+        if (incidentState == IncidentState.ACTIVE_INCIDENT) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onPanicTriggered,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                ) {
+                    Text(
+                        text = "EMERGENCY ACTIVE — RECORDING EVIDENCE",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onStopAndSealIncident,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+                ) {
+                    Text(
+                        text = "STOP & SEAL INCIDENT EVIDENCE",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        } else {
+            Button(
+                onClick = onPanicTriggered,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(80.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+            ) {
+                Text(
+                    text = "EMERGENCY PANIC",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
         }
 
         // Navigation Buttons

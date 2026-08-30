@@ -76,10 +76,10 @@ class ScreamDetector(private val config: DetectionConfig) {
         val amplitudeRatio = maxAmplitude.toFloat() / 32768.0f
 
         // High zero-crossing frequency (scream / high pitch) combined with vocal acoustic intensity
-        if (zcr in 0.05f..0.65f && amplitudeRatio >= 0.30f) {
-            return (amplitudeRatio * 1.4f).coerceAtMost(1.0f)
+        if (zcr in 0.05f..0.65f && amplitudeRatio >= 0.15f) {
+            return (amplitudeRatio * 2.0f).coerceAtMost(1.0f)
         }
-        return (amplitudeRatio * 0.2f).coerceAtMost(0.49f)
+        return (amplitudeRatio * 0.5f).coerceAtMost(0.29f)
     }
 }
 

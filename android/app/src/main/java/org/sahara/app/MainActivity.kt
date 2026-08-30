@@ -154,6 +154,22 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     },
+                    onStopAndSealIncident = {
+                        scope.launch {
+                            val currentInc = stateMachine.currentIncident.value
+                            if (currentInc != null) {
+                                val entries = evidenceRepository.getEvidenceForIncident(currentInc.incidentId).first()
+                                if (entries.isNotEmpty()) {
+                                    val manifest = manifestManager.createAndSignManifest(currentInc, entries)
+                                    stateMachine.sealIncident(manifest.merkleRoot)
+                                    activeIncidentState = IncidentState.SEALED
+                                } else {
+                                    stateMachine.cancelIncident()
+                                    activeIncidentState = IncidentState.CANCELLED
+                                }
+                            }
+                        }
+                    },
                     incidentState = activeIncidentState,
                     onOpenHelpDirectory = { currentScreen = Screen.HELP_DIRECTORY },
                     onOpenVerifier = { currentScreen = Screen.VERIFIER }
