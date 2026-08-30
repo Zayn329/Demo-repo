@@ -1,0 +1,912 @@
+openapi: 3.1.0
+
+info:
+title: Sahara API
+version: 1.0.0
+description: |
+Public backend API for Sahara, an offline-first safety companion.
+
+The backend supports authentication, legal drafting, metadata synchronization,
+Notify Circle delivery, acknowledgements, and optional integrity anchoring.
+
+The API is not part of the mandatory core safety path. Distress detection,
+panic activation, evidence capture, encryption, signing, Merkle generation,
+and local persistence must continue without backend connectivity.
+
+servers:
+
+- url: https://api.example.com
+  description: Deployment server
+- url: http://localhost:8000
+  description: Local development server
+
+tags:
+
+- name: Authentication
+- name: Legal Assistance
+- name: Synchronization
+- name: Notify Circle
+- name: Anchoring
+
+paths:
+
+/api/v1/auth/request-otp:
+post:
+tags: [Authentication]
+summary: Request a phone OTP
+operationId: requestOtp
+security: []
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/OtpRequest'
+responses:
+'202':
+description: OTP request accepted
+headers:
+X-Request-ID:
+$ref: '#/components/headers/RequestId'
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/OtpRequestAccepted'
+'400':
+$ref: '#/components/responses/BadRequest'
+'429':
+$ref: '#/components/responses/RateLimited'
+
+/api/v1/auth/verify-otp:
+post:
+tags: [Authentication]
+summary: Verify OTP and create a session
+operationId: verifyOtp
+security: []
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/OtpVerificationRequest'
+responses:
+'200':
+description: Authentication successful
+headers:
+X-Request-ID:
+$ref: '#/components/headers/RequestId'
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/TokenPair'
+'400':
+$ref: '#/components/responses/BadRequest'
+'401':
+$ref: '#/components/responses/InvalidOtp'
+'429':
+$ref: '#/components/responses/RateLimited'
+
+/api/v1/auth/refresh:
+post:
+tags: [Authentication]
+summary: Refresh an authenticated session
+operationId: refreshToken
+security: []
+requestBody:
+required: true
+content:
+application/json:
+schema:
+type: object
+required: [refresh_token]
+properties:
+refresh_token:
+type: string
+responses:
+'200':
+description: Session refreshed
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/TokenPair'
+'401':
+$ref: '#/components/responses/Unauthorized'
+
+/api/v1/auth/logout:
+post:
+tags: [Authentication]
+summary: Revoke the current refresh session
+operationId: logout
+security:
+- BearerAuth: []
+responses:
+'204':
+description: Session revoked
+'401':
+$ref: '#/components/responses/Unauthorized'
+
+/api/v1/legal/drafts:
+post:
+tags: [Legal Assistance]
+summary: Generate a legal assistance draft
+operationId: generateLegalDraft
+security:
+- BearerAuth: []
+parameters:
+- $ref: '#/components/parameters/IdempotencyKey'
+- $ref: '#/components/parameters/RequestId'
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/LegalDraftRequest'
+responses:
+'200':
+description: Legal draft generated
+headers:
+X-Request-ID:
+$ref: '#/components/headers/RequestId'
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/LegalDraftResponse'
+'400':
+$ref: '#/components/responses/BadRequest'
+'401':
+$ref: '#/components/responses/Unauthorized'
+'409':
+$ref: '#/components/responses/IdempotencyConflict'
+'429':
+$ref: '#/components/responses/RateLimited'
+'503':
+$ref: '#/components/responses/LegalProviderUnavailable'
+
+/api/v1/sync/batch:
+post:
+tags: [Synchronization]
+summary: Synchronize offline metadata and append-only events
+operationId: syncBatch
+security:
+- BearerAuth: []
+parameters:
+- $ref: '#/components/parameters/IdempotencyKey'
+- $ref: '#/components/parameters/RequestId'
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/SyncBatchRequest'
+responses:
+'200':
+description: Batch processed
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/SyncBatchResponse'
+'400':
+$ref: '#/components/responses/BadRequest'
+'401':
+$ref: '#/components/responses/Unauthorized'
+'409':
+$ref: '#/components/responses/IntegrityConflict'
+'429':
+$ref: '#/components/responses/RateLimited'
+
+/api/v1/notify/circle:
+get:
+tags: [Notify Circle]
+summary: Retrieve the authenticated user's Notify Circle
+operationId: getNotifyCircle
+security:
+- BearerAuth: []
+responses:
+'200':
+description: Notify Circle
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/NotifyCircle'
+'401':
+$ref: '#/components/responses/Unauthorized'
+
+put:
+  tags: [Notify Circle]
+  summary: Replace Notify Circle membership
+  operationId: replaceNotifyCircle
+  security:
+    - BearerAuth: []
+  parameters:
+    - $ref: '#/components/parameters/IdempotencyKey'
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: '#/components/schemas/NotifyCircleUpdate'
+  responses:
+    '200':
+      description: Notify Circle updated
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/NotifyCircle'
+    '400':
+      $ref: '#/components/responses/BadRequest'
+    '401':
+      $ref: '#/components/responses/Unauthorized'
+
+/api/v1/notifications/incident-alert:
+post:
+tags: [Notify Circle]
+summary: Request backend fan-out of an incident alert
+operationId: sendIncidentAlert
+security:
+- BearerAuth: []
+parameters:
+- $ref: '#/components/parameters/IdempotencyKey'
+- $ref: '#/components/parameters/RequestId'
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/IncidentAlertRequest'
+responses:
+'202':
+description: Alert accepted for delivery
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/NotificationDispatchResponse'
+'400':
+$ref: '#/components/responses/BadRequest'
+'401':
+$ref: '#/components/responses/Unauthorized'
+'409':
+$ref: '#/components/responses/IdempotencyConflict'
+
+/api/v1/notifications/acknowledgements:
+post:
+tags: [Notify Circle]
+summary: Record Notify Circle acknowledgement
+operationId: acknowledgeIncident
+security:
+- BearerAuth: []
+parameters:
+- $ref: '#/components/parameters/IdempotencyKey'
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/AcknowledgementRequest'
+responses:
+'201':
+description: Acknowledgement recorded
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Acknowledgement'
+'401':
+$ref: '#/components/responses/Unauthorized'
+'404':
+$ref: '#/components/responses/NotFound'
+
+/api/v1/anchors:
+post:
+tags: [Anchoring]
+summary: Submit an incident integrity root for asynchronous anchoring
+operationId: createAnchor
+security:
+- BearerAuth: []
+parameters:
+- $ref: '#/components/parameters/IdempotencyKey'
+- $ref: '#/components/parameters/RequestId'
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/AnchorRequest'
+responses:
+'202':
+description: Anchor request accepted
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/AnchorAccepted'
+'400':
+$ref: '#/components/responses/BadRequest'
+'401':
+$ref: '#/components/responses/Unauthorized'
+'409':
+$ref: '#/components/responses/IntegrityConflict'
+'429':
+$ref: '#/components/responses/RateLimited'
+
+/api/v1/anchors/{anchor_id}:
+get:
+tags: [Anchoring]
+summary: Retrieve anchor status
+operationId: getAnchor
+security:
+- BearerAuth: []
+parameters:
+- name: anchor_id
+in: path
+required: true
+schema:
+type: string
+format: uuid
+responses:
+'200':
+description: Anchor status
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/AnchorStatus'
+'401':
+$ref: '#/components/responses/Unauthorized'
+'404':
+$ref: '#/components/responses/NotFound'
+
+components:
+
+securitySchemes:
+BearerAuth:
+type: http
+scheme: bearer
+bearerFormat: JWT
+
+parameters:
+IdempotencyKey:
+name: Idempotency-Key
+in: header
+required: false
+schema:
+type: string
+minLength: 16
+maxLength: 255
+
+RequestId:
+  name: X-Request-ID
+  in: header
+  required: false
+  schema:
+    type: string
+    maxLength: 128
+
+headers:
+RequestId:
+description: Correlation identifier for this request.
+schema:
+type: string
+
+schemas:
+
+OtpRequest:
+  type: object
+  required: [phone_number]
+  properties:
+    phone_number:
+      type: string
+      description: E.164 formatted phone number.
+      example: "+919876543210"
+
+OtpRequestAccepted:
+  type: object
+  required: [request_id, expires_in_seconds]
+  properties:
+    request_id:
+      type: string
+      format: uuid
+    expires_in_seconds:
+      type: integer
+      minimum: 1
+
+OtpVerificationRequest:
+  type: object
+  required: [request_id, otp]
+  properties:
+    request_id:
+      type: string
+      format: uuid
+    otp:
+      type: string
+      minLength: 4
+      maxLength: 12
+
+TokenPair:
+  type: object
+  required:
+    - access_token
+    - refresh_token
+    - token_type
+    - access_expires_in_seconds
+  properties:
+    access_token:
+      type: string
+    refresh_token:
+      type: string
+    token_type:
+      type: string
+      enum: [Bearer]
+    access_expires_in_seconds:
+      type: integer
+      minimum: 1
+
+ApproximateLocation:
+  type: object
+  description: |
+    Reduced-precision location suitable for approved sharing.
+    Exact evidence coordinates are not accepted through this field.
+  required: [latitude, longitude, precision_meters]
+  properties:
+    latitude:
+      type: number
+      format: double
+    longitude:
+      type: number
+      format: double
+    precision_meters:
+      type: integer
+      minimum: 1
+    captured_at:
+      type: string
+      format: date-time
+
+LegalDraftRequest:
+  type: object
+  required:
+    - incident_id
+    - document_type
+    - incident_summary
+    - evidence_integrity
+    - occurred_at
+  properties:
+    incident_id:
+      type: string
+      format: uuid
+    document_type:
+      type: string
+      enum:
+        - incident_summary
+        - fir_style_complaint
+        - generic_police_complaint
+    incident_summary:
+      type: string
+      minLength: 1
+      maxLength: 20000
+    evidence_integrity:
+      $ref: '#/components/schemas/EvidenceIntegrity'
+    occurred_at:
+      type: string
+      format: date-time
+    approximate_location:
+      $ref: '#/components/schemas/ApproximateLocation'
+    user_narrative:
+      type: string
+      maxLength: 20000
+    witness_statements:
+      type: array
+      maxItems: 20
+      items:
+        type: string
+        maxLength: 10000
+    user_approved_external_processing:
+      type: boolean
+      const: true
+
+EvidenceIntegrity:
+  type: object
+  required: [merkle_root, manifest_hash]
+  properties:
+    merkle_root:
+      type: string
+      pattern: '^[A-Fa-f0-9]{64}$'
+    manifest_hash:
+      type: string
+      pattern: '^[A-Fa-f0-9]{64}$'
+    signature:
+      type: string
+    signature_algorithm:
+      type: string
+
+LegalDraftResponse:
+  type: object
+  required:
+    - draft_id
+    - document_type
+    - title
+    - summary
+    - draft_sections
+    - disclaimers
+    - legal_references
+    - review_required
+    - generated_at
+    - input_retention
+  properties:
+    draft_id:
+      type: string
+      format: uuid
+    document_type:
+      type: string
+    title:
+      type: string
+    summary:
+      type: string
+    draft_sections:
+      type: array
+      items:
+        $ref: '#/components/schemas/DraftSection'
+    disclaimers:
+      type: array
+      items:
+        type: string
+    legal_references:
+      type: array
+      items:
+        $ref: '#/components/schemas/LegalReference'
+    review_required:
+      type: boolean
+      const: true
+    generated_at:
+      type: string
+      format: date-time
+    input_retention:
+      type: string
+      enum:
+        - deleted_after_generation
+        - deletion_warning
+
+DraftSection:
+  type: object
+  required: [heading, content]
+  properties:
+    heading:
+      type: string
+    content:
+      type: string
+
+LegalReference:
+  type: object
+  required: [reference]
+  properties:
+    reference:
+      type: string
+    description:
+      type: string
+
+SyncBatchRequest:
+  type: object
+  required: [device_id, events]
+  properties:
+    device_id:
+      type: string
+      minLength: 1
+      description: Privacy-preserving application device identifier.
+    events:
+      type: array
+      minItems: 1
+      maxItems: 500
+      items:
+        $ref: '#/components/schemas/SyncEvent'
+
+SyncEvent:
+  type: object
+  required:
+    - event_id
+    - incident_id
+    - event_type
+    - occurred_at
+    - payload
+  properties:
+    event_id:
+      type: string
+      format: uuid
+    incident_id:
+      type: string
+      format: uuid
+    event_type:
+      type: string
+      enum:
+        - incident_metadata
+        - integrity_root
+        - delivery_event
+        - acknowledgement_event
+        - approximate_location_update
+        - incident_cancelled
+        - incident_sealed
+    occurred_at:
+      type: string
+      format: date-time
+    payload:
+      type: object
+      additionalProperties: true
+
+SyncBatchResponse:
+  type: object
+  required: [accepted_event_ids, rejected_events]
+  properties:
+    accepted_event_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+    rejected_events:
+      type: array
+      items:
+        $ref: '#/components/schemas/RejectedSyncEvent'
+
+RejectedSyncEvent:
+  type: object
+  required: [event_id, code, message]
+  properties:
+    event_id:
+      type: string
+      format: uuid
+    code:
+      type: string
+    message:
+      type: string
+
+NotifyCircle:
+  type: object
+  required: [members]
+  properties:
+    members:
+      type: array
+      maxItems: 5
+      items:
+        $ref: '#/components/schemas/NotifyCircleMember'
+
+NotifyCircleUpdate:
+  type: object
+  required: [members]
+  properties:
+    members:
+      type: array
+      maxItems: 5
+      items:
+        $ref: '#/components/schemas/NotifyCircleMemberInput'
+
+NotifyCircleMemberInput:
+  type: object
+  required: [display_name, channel]
+  properties:
+    display_name:
+      type: string
+    channel:
+      type: string
+      enum: [app, sms]
+    contact_reference:
+      type: string
+      description: |
+        Protected contact reference. Phone numbers must not appear in logs.
+
+NotifyCircleMember:
+  allOf:
+    - $ref: '#/components/schemas/NotifyCircleMemberInput'
+    - type: object
+      required: [member_id]
+      properties:
+        member_id:
+          type: string
+          format: uuid
+
+IncidentAlertRequest:
+  type: object
+  required:
+    - incident_id
+    - status
+    - occurred_at
+  properties:
+    incident_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+      enum:
+        - possible_distress
+        - emergency_confirmed
+        - incident_cancelled
+        - evidence_sealed
+    occurred_at:
+      type: string
+      format: date-time
+    approximate_location:
+      $ref: '#/components/schemas/ApproximateLocation'
+    integrity_reference:
+      type: string
+    message:
+      type: string
+      maxLength: 1000
+
+NotificationDispatchResponse:
+  type: object
+  required: [dispatch_id, status]
+  properties:
+    dispatch_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+      enum: [accepted, partial_delivery]
+
+AcknowledgementRequest:
+  type: object
+  required: [incident_id]
+  properties:
+    incident_id:
+      type: string
+      format: uuid
+
+Acknowledgement:
+  type: object
+  required:
+    - acknowledgement_id
+    - incident_id
+    - acknowledged_at
+  properties:
+    acknowledgement_id:
+      type: string
+      format: uuid
+    incident_id:
+      type: string
+      format: uuid
+    acknowledged_at:
+      type: string
+      format: date-time
+
+AnchorRequest:
+  type: object
+  required:
+    - incident_id
+    - merkle_root
+    - signature
+    - timestamp
+  properties:
+    incident_id:
+      type: string
+      format: uuid
+    merkle_root:
+      type: string
+      pattern: '^[A-Fa-f0-9]{64}$'
+    signature:
+      type: string
+    timestamp:
+      type: string
+      format: date-time
+    device_integrity_signal:
+      type: string
+      nullable: true
+
+AnchorAccepted:
+  type: object
+  required: [anchor_id, status]
+  properties:
+    anchor_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+      enum: [pending]
+
+AnchorStatus:
+  type: object
+  required:
+    - anchor_id
+    - status
+    - anchor_mode
+  properties:
+    anchor_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+      enum: [pending, anchored, failed]
+    anchor_mode:
+      type: string
+      enum: [testnet, mock]
+    transaction_reference:
+      type: string
+      nullable: true
+    proof:
+      type: object
+      additionalProperties: true
+    failure_reason:
+      type: string
+      nullable: true
+
+ErrorEnvelope:
+  type: object
+  required: [error]
+  properties:
+    error:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - INVALID_OTP
+            - OTP_EXPIRED
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - RATE_LIMITED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - INTEGRITY_CONFLICT
+            - LEGAL_PROVIDER_UNAVAILABLE
+            - LEGAL_INPUT_RETENTION_WARNING
+            - ANCHORING_UNAVAILABLE
+            - INTERNAL_ERROR
+        message:
+          type: string
+        retryable:
+          type: boolean
+
+responses:
+
+BadRequest:
+  description: Invalid request
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+Unauthorized:
+  description: Authentication required or invalid
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+InvalidOtp:
+  description: OTP verification failed
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+RateLimited:
+  description: Request rate limit exceeded
+  headers:
+    Retry-After:
+      schema:
+        type: integer
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+NotFound:
+  description: Resource not found
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+IdempotencyConflict:
+  description: Idempotency key reused with incompatible request
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+IntegrityConflict:
+  description: Conflicting evidence integrity data
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
+
+LegalProviderUnavailable:
+  description: Legal drafting provider unavailable
+  content:
+    application/json:
+      schema:
+        $ref: '#/components/schemas/ErrorEnvelope'
