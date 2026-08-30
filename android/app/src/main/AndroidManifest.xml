@@ -1,20 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Hardware Feature Declarations (Set required=false to prevent installation blocks on devices without specific hardware) -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
     <!-- Runtime permissions required for core safety functionality -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Direct Emergency SMS Fallback (SEND_SMS only - incoming SMS READ/RECEIVE strictly prohibited) -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
-    <!-- Foreground Service permissions -->
+    <!-- Foreground Service permissions for background safety monitoring -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Bluetooth & Nearby Connections permissions for offline mesh relay -->
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
@@ -25,6 +37,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Sahara">
 
+        <!-- Only launcher Activity is exported -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -34,7 +47,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground Service Registration -->
+        <!-- Safety Foreground Service (exported=false) -->
         <service
             android:name="org.sahara.features.incident.service.SafetyForegroundService"
             android:exported="false"
