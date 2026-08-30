@@ -1,6 +1,11 @@
 package org.sahara.app
 
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.sahara.app.export.EvidenceExporter
 import org.sahara.app.export.ExportPackage
@@ -27,9 +33,11 @@ import org.sahara.core.domain.models.Incident
 import org.sahara.core.domain.models.IncidentState
 import org.sahara.core.security.crypto.AesGcmFileStorage
 import org.sahara.core.security.crypto.KeyStorageManagerImpl
+import org.sahara.features.incident.service.SafetyForegroundService
 import org.sahara.features.incident.statemachine.IncidentStateMachine
 import org.sahara.features.panic.controller.PanicController
 import org.sahara.services.evidence.engine.EvidenceCaptureEngine
+import org.sahara.services.evidence.manifest.EvidenceManifest
 import org.sahara.services.evidence.manifest.EvidenceManifestManager
 import org.sahara.services.evidence.manifest.EvidenceVerifier
 import org.sahara.services.evidence.preroll.BoundedAudioPreRollBuffer
@@ -53,6 +61,25 @@ class MainActivity : ComponentActivity() {
     private lateinit var keyManager: KeyStorageManagerImpl
     private lateinit var captureEngine: EvidenceCaptureEngine
     private lateinit var manifestManager: EvidenceManifestManager
+    private lateinit var preRollBuffer: BoundedAudioPreRollBuffer
+
+    private var foregroundService: SafetyForegroundService? = null
+    private var isServiceBound = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as SafetyForegroundService.LocalBinder
+            foregroundService = binder.getService()
+            foregroundService?.stateMachine = stateMachine
+            foregroundService?.evidenceCaptureEngine = captureEngine
+            isServiceBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            foregroundService = null
+            isServiceBound = false
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,12 +94,17 @@ class MainActivity : ComponentActivity() {
 
         keyManager = KeyStorageManagerImpl()
         val gcmStorage = AesGcmFileStorage()
-        val preRollBuffer = BoundedAudioPreRollBuffer()
+        preRollBuffer = BoundedAudioPreRollBuffer()
         val storageDir = File(filesDir, "evidence")
         storageDir.mkdirs()
 
         captureEngine = EvidenceCaptureEngine(evidenceRepository, keyManager, gcmStorage, preRollBuffer, storageDir)
         manifestManager = EvidenceManifestManager(incidentRepository, keyManager)
+
+        // Bind SafetyForegroundService
+        val serviceIntent = Intent(this, SafetyForegroundService::class.java)
+        startService(serviceIntent)
+        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         setContent {
             SaharaTheme {
@@ -114,6 +146,12 @@ class MainActivity : ComponentActivity() {
                         scope.launch {
                             panicController.triggerPanicImmediately("IN_APP_EMERGENCY_BUTTON")
                             activeIncidentState = IncidentState.ACTIVE_INCIDENT
+
+                            // Drain pre-roll audio buffer into active incident evidence
+                            val currentInc = stateMachine.currentIncident.value
+                            if (currentInc != null) {
+                                captureEngine.processBufferedPreRoll(currentInc.incidentId)
+                            }
                         }
                     },
                     incidentState = activeIncidentState,
@@ -131,25 +169,59 @@ class MainActivity : ComponentActivity() {
                     exportPackage = recentExportPackage,
                     onVerifyPackage = {
                         scope.launch {
-                            val incident = stateMachine.currentIncident.value ?: Incident(
-                                incidentId = UUID.randomUUID(),
-                                state = IncidentState.SEALED,
-                                sealedAt = System.currentTimeMillis()
-                            )
-                            val manifest = manifestManager.createAndSignManifest(incident, emptyList())
-                            val isVerified = EvidenceVerifier.verifyPackageIntegrity(manifest, emptyList(), keyManager)
-                            recentExportPackage = EvidenceExporter.createExportPackage(
-                                incident = incident,
-                                manifest = manifest,
-                                evidenceEntries = emptyList(),
-                                outputDir = filesDir,
-                                isIntegrityVerified = isVerified
-                            )
+                            val incident = stateMachine.currentIncident.value
+                            if (incident == null) {
+                                val dummyUnsealedIncident = Incident(
+                                    incidentId = UUID.randomUUID(),
+                                    state = IncidentState.ACTIVE_INCIDENT
+                                )
+                                recentExportPackage = EvidenceExporter.createExportPackage(
+                                    incident = dummyUnsealedIncident,
+                                    manifest = null,
+                                    evidenceEntries = emptyList(),
+                                    outputDir = filesDir,
+                                    isIntegrityVerified = false
+                                )
+                            } else {
+                                val entries = evidenceRepository.getEvidenceForIncident(incident.incidentId).first()
+                                if (entries.isEmpty() || incident.state != IncidentState.SEALED) {
+                                    recentExportPackage = EvidenceExporter.createExportPackage(
+                                        incident = incident,
+                                        manifest = null,
+                                        evidenceEntries = entries,
+                                        outputDir = filesDir,
+                                        isIntegrityVerified = false
+                                    )
+                                } else {
+                                    val manifest = manifestManager.createAndSignManifest(incident, entries)
+                                    val isVerified = EvidenceVerifier.verifyPackageIntegrity(
+                                        manifest = manifest,
+                                        evidenceEntries = entries,
+                                        keyStorageManager = keyManager,
+                                        incidentState = incident.state
+                                    )
+                                    recentExportPackage = EvidenceExporter.createExportPackage(
+                                        incident = incident,
+                                        manifest = manifest,
+                                        evidenceEntries = entries,
+                                        outputDir = filesDir,
+                                        isIntegrityVerified = isVerified
+                                    )
+                                }
+                            }
                         }
                     },
                     onBack = { currentScreen = Screen.DASHBOARD }
                 )
             }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isServiceBound) {
+            unbindService(serviceConnection)
+            isServiceBound = false
         }
     }
 }
