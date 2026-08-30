@@ -1,0 +1,161 @@
+package org.sahara.core.data.repository
+
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import org.sahara.core.data.db.AuditEventDao
+import org.sahara.core.data.db.AuditEventEntity
+import org.sahara.core.data.db.EvidenceDao
+import org.sahara.core.data.db.EvidenceEntryEntity
+import org.sahara.core.data.db.IncidentDao
+import org.sahara.core.data.db.IncidentEntity
+import org.sahara.core.data.db.NotifyContactDao
+import org.sahara.core.data.db.NotifyContactEntity
+import org.sahara.core.domain.models.AuditEvent
+import org.sahara.core.domain.models.AuditResult
+import org.sahara.core.domain.models.ContactType
+import org.sahara.core.domain.models.EvidenceEntry
+import org.sahara.core.domain.models.EvidenceType
+import org.sahara.core.domain.models.Incident
+import org.sahara.core.domain.models.IncidentState
+import org.sahara.core.domain.models.NotifyContact
+import org.sahara.core.domain.repository.AuditRepository
+import org.sahara.core.domain.repository.ContactRepository
+import org.sahara.core.domain.repository.EvidenceRepository
+import org.sahara.core.domain.repository.IncidentRepository
+import java.util.UUID
+
+class IncidentRepositoryImpl(private val incidentDao: IncidentDao) : IncidentRepository {
+    override suspend fun getIncidentById(id: UUID): Incident? {
+        return incidentDao.getIncidentById(id.toString())?.toDomain()
+    }
+
+    override fun getAllIncidents(): Flow<List<Incident>> {
+        return incidentDao.getAllIncidents().map { list -> list.map { it.toDomain() } }
+    }
+
+    override suspend fun saveIncident(incident: Incident) {
+        incidentDao.insertIncident(incident.toEntity())
+    }
+
+    override suspend fun updateState(id: UUID, state: IncidentState, sealedAt: Long?, merkleRoot: String?) {
+        incidentDao.updateIncidentState(id.toString(), state.name, sealedAt, merkleRoot)
+    }
+
+    private fun IncidentEntity.toDomain() = Incident(
+        incidentId = UUID.fromString(incidentId),
+        state = IncidentState.valueOf(state),
+        createdAt = createdAt,
+        activatedAt = activatedAt,
+        sealedAt = sealedAt,
+        triggerSources = triggerSourcesJson.removeSurrounding("[", "]").split(",").map { it.trim() }.filter { it.isNotEmpty() },
+        configurationSnapshotJson = configurationSnapshotJson,
+        finalMerkleRoot = finalMerkleRoot
+    )
+
+    private fun Incident.toEntity() = IncidentEntity(
+        incidentId = incidentId.toString(),
+        state = state.name,
+        createdAt = createdAt,
+        activatedAt = activatedAt,
+        sealedAt = sealedAt,
+        triggerSourcesJson = "[${triggerSources.joinToString(",")}]",
+        configurationSnapshotJson = configurationSnapshotJson,
+        finalMerkleRoot = finalMerkleRoot
+    )
+}
+
+class EvidenceRepositoryImpl(private val evidenceDao: EvidenceDao) : EvidenceRepository {
+    override fun getEvidenceForIncident(incidentId: UUID): Flow<List<EvidenceEntry>> {
+        return evidenceDao.getEvidenceForIncident(incidentId.toString()).map { list -> list.map { it.toDomain() } }
+    }
+
+    override suspend fun saveEvidence(evidence: EvidenceEntry) {
+        evidenceDao.insertEvidence(evidence.toEntity())
+    }
+
+    private fun EvidenceEntryEntity.toDomain() = EvidenceEntry(
+        evidenceId = UUID.fromString(evidenceId),
+        incidentId = UUID.fromString(incidentId),
+        type = EvidenceType.valueOf(type),
+        createdAt = createdAt,
+        encryptedPath = encryptedPath,
+        sha256 = sha256,
+        signatureReference = signatureReference,
+        chunkIndex = chunkIndex
+    )
+
+    private fun EvidenceEntry.toEntity() = EvidenceEntryEntity(
+        evidenceId = evidenceId.toString(),
+        incidentId = incidentId.toString(),
+        type = type.name,
+        createdAt = createdAt,
+        encryptedPath = encryptedPath,
+        sha256 = sha256,
+        signatureReference = signatureReference,
+        chunkIndex = chunkIndex
+    )
+}
+
+class AuditRepositoryImpl(private val auditDao: AuditEventDao) : AuditRepository {
+    override fun getAuditLogs(): Flow<List<AuditEvent>> {
+        return auditDao.getAuditLogs().map { list -> list.map { it.toDomain() } }
+    }
+
+    override suspend fun recordAudit(auditEvent: AuditEvent) {
+        auditDao.insertAudit(auditEvent.toEntity())
+    }
+
+    private fun AuditEventEntity.toDomain() = AuditEvent(
+        auditId = UUID.fromString(auditId),
+        occurredAt = occurredAt,
+        component = component,
+        action = action,
+        result = AuditResult.valueOf(result),
+        incidentId = incidentId?.let { UUID.fromString(it) },
+        metadataJson = metadataJson
+    )
+
+    private fun AuditEvent.toEntity() = AuditEventEntity(
+        auditId = auditId.toString(),
+        occurredAt = occurredAt,
+        component = component,
+        action = action,
+        result = result.name,
+        incidentId = incidentId?.toString(),
+        metadataJson = metadataJson
+    )
+}
+
+class ContactRepositoryImpl(private val contactDao: NotifyContactDao) : ContactRepository {
+    override fun getContacts(): Flow<List<NotifyContact>> {
+        return contactDao.getContacts().map { list -> list.map { it.toDomain() } }
+    }
+
+    override suspend fun saveContact(contact: NotifyContact) {
+        contactDao.insertContact(contact.toEntity())
+    }
+
+    override suspend fun deleteContact(id: UUID) {
+        contactDao.deleteContact(id.toString())
+    }
+
+    private fun NotifyContactEntity.toDomain() = NotifyContact(
+        contactId = UUID.fromString(contactId),
+        displayName = displayName,
+        type = ContactType.valueOf(type),
+        phoneNumber = phoneNumber,
+        appUserId = appUserId?.let { UUID.fromString(it) },
+        locationPermission = locationPermission,
+        notificationPermission = notificationPermission
+    )
+
+    private fun NotifyContact.toEntity() = NotifyContactEntity(
+        contactId = contactId.toString(),
+        displayName = displayName,
+        type = type.name,
+        phoneNumber = phoneNumber,
+        appUserId = appUserId?.toString(),
+        locationPermission = locationPermission,
+        notificationPermission = notificationPermission
+    )
+}
