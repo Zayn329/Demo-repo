@@ -24,6 +24,7 @@
         android:label="Sahara Companion"
         android:supportsRtl="true"
         android:theme="@style/Theme.Sahara">
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -32,6 +33,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Foreground Service Registration -->
+        <service
+            android:name="org.sahara.features.incident.service.SafetyForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|location" />
+
     </application>
 
 </manifest>
