@@ -73,6 +73,61 @@ class SafetyForegroundService : Service(), SensorEventListener {
         }
 
         startAudioRecording()
+
+        // Launch detection signal collection & fusion processing
+        serviceScope.launch {
+            keywordDetector.detectionFlow.collect { signal ->
+                fusionEngine.onSignalReceived(signal)
+            }
+        }
+        serviceScope.launch {
+            screamDetector.detectionFlow.collect { signal ->
+                fusionEngine.onSignalReceived(signal)
+            }
+        }
+        serviceScope.launch {
+            motionDetector.detectionFlow.collect { signal ->
+                fusionEngine.onSignalReceived(signal)
+            }
+        }
+
+        // Collect fusion engine decisions and update state machine
+        serviceScope.launch {
+            fusionEngine.decisionFlow.collect { decision ->
+                android.util.Log.d("SaharaDetection", "Fusion decision emitted: $decision")
+                when (decision) {
+                    is org.sahara.services.detection.fusion.FusionDecision.EnterPossibleDistress -> {
+                        stateMachine?.let { sm ->
+                            sm.onSuspiciousSignalDetected(decision.primarySignal.detectorType.name)
+                            sm.transitionToCandidate()
+                            updateNotificationForState(IncidentState.CANDIDATE_INCIDENT)
+                        }
+                    }
+                    is org.sahara.services.detection.fusion.FusionDecision.ConfirmIncident -> {
+                        stateMachine?.let { sm ->
+                            sm.activateIncident(decision.activeSignals.joinToString { it.detectorType.name })
+                            updateNotificationForState(IncidentState.ACTIVE_INCIDENT)
+                        }
+                    }
+                    is org.sahara.services.detection.fusion.FusionDecision.CandidateExpired -> {
+                        stateMachine?.let { sm ->
+                            if (sm.currentState.value != IncidentState.ACTIVE_INCIDENT && sm.currentState.value != IncidentState.SEALED) {
+                                sm.cancelIncident()
+                                updateNotificationForState(IncidentState.MONITORING)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Periodic timeout loop to check confirmation window expirations
+        serviceScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                fusionEngine.checkConfirmationTimeout(System.currentTimeMillis())
+            }
+        }
     }
 
     private fun startAudioRecording() {
@@ -106,8 +161,12 @@ class SafetyForegroundService : Service(), SensorEventListener {
                             val chunk = AudioChunk("chunk_${System.currentTimeMillis()}", buffer.clone())
                             preRollBuffer.offerChunk(chunk)
 
-                            keywordDetector.processAudioChunk(buffer, sampleRate)
-                            screamDetector.processAudioChunk(buffer, sampleRate)
+                            val kwConf = keywordDetector.processAudioChunk(buffer, sampleRate)
+                            val screamConf = screamDetector.processAudioChunk(buffer, sampleRate)
+
+                            if (chunkIndex % 50 == 0) { // Log diagnostic summary every ~5 seconds
+                                android.util.Log.d("SaharaDetection", "Audio chunk #$chunkIndex processed. kW_conf=%.2f, scream_conf=%.2f".format(kwConf, screamConf))
+                            }
 
                             // If active incident, save real encrypted chunk
                             stateMachine?.currentIncident?.value?.let { incident ->

@@ -30,9 +30,19 @@ class SignalFusionEngine(val config: DetectionConfig) {
 
         when (currentState) {
             IncidentState.MONITORING -> {
-                if (signal.detectorType == DetectorType.KEYWORD && signal.confidence >= config.keywordConfidenceThreshold) {
+                val isQualifyingSignal = when (signal.detectorType) {
+                    DetectorType.KEYWORD -> signal.confidence >= config.keywordConfidenceThreshold
+                    DetectorType.SCREAM -> signal.confidence >= config.screamConfidenceThreshold
+                    DetectorType.MOTION -> true
+                    else -> false
+                }
+                if (isQualifyingSignal) {
                     currentState = IncidentState.CANDIDATE_INCIDENT
                     _decisionFlow.tryEmit(FusionDecision.EnterPossibleDistress(signal))
+                    if (evaluateConfirmationRule()) {
+                        currentState = IncidentState.ACTIVE_INCIDENT
+                        _decisionFlow.tryEmit(FusionDecision.ConfirmIncident(activeSignals.toList()))
+                    }
                 }
             }
             IncidentState.CANDIDATE_INCIDENT, IncidentState.PENDING_CONFIRMATION -> {

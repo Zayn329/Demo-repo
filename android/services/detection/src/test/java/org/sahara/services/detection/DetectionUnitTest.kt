@@ -65,23 +65,26 @@ class DetectionUnitTest {
         val keywordSignal = SignalResult(DetectorType.KEYWORD, 0.85f, "help", System.currentTimeMillis())
         fusionEngine.onSignalReceived(keywordSignal)
 
-        assertEquals(IncidentState.CANDIDATE_INCIDENT, fusionEngine.currentState)
+        assertEquals(IncidentState.ACTIVE_INCIDENT, fusionEngine.currentState)
         assertTrue("Keyword signal alone satisfies default rule", fusionEngine.evaluateConfirmationRule())
 
         fusionEngine.resetState()
         val screamSignal = SignalResult(DetectorType.SCREAM, 0.80f, "scream", System.currentTimeMillis())
         fusionEngine.onSignalReceived(screamSignal)
+        assertEquals(IncidentState.CANDIDATE_INCIDENT, fusionEngine.currentState)
         assertFalse("Scream alone does not satisfy default rule", fusionEngine.evaluateConfirmationRule())
 
         val motionSignal = SignalResult(DetectorType.MOTION, 0.90f, "impact", System.currentTimeMillis())
         fusionEngine.onSignalReceived(motionSignal)
+        assertEquals(IncidentState.ACTIVE_INCIDENT, fusionEngine.currentState)
         assertTrue("Scream AND Motion satisfies default rule", fusionEngine.evaluateConfirmationRule())
     }
 
     @Test
     fun testConfirmationTimeoutExpiration() {
-        val keywordSignal = SignalResult(DetectorType.KEYWORD, 0.85f, "help", System.currentTimeMillis() - 10000L)
-        fusionEngine.onSignalReceived(keywordSignal)
+        val screamSignal = SignalResult(DetectorType.SCREAM, 0.80f, "scream", System.currentTimeMillis() - 10000L)
+        fusionEngine.onSignalReceived(screamSignal)
+        assertEquals(IncidentState.CANDIDATE_INCIDENT, fusionEngine.currentState)
 
         fusionEngine.checkConfirmationTimeout(System.currentTimeMillis())
         assertEquals(IncidentState.MONITORING, fusionEngine.currentState)

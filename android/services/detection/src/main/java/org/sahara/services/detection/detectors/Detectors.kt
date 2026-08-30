@@ -12,7 +12,7 @@ class KeywordDetector(private val config: DetectionConfig) {
     private val _detectionFlow = MutableSharedFlow<SignalResult>(extraBufferCapacity = 64)
     val detectionFlow: Flow<SignalResult> = _detectionFlow.asSharedFlow()
 
-    fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000) {
+    fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000): Float {
         val calculatedConfidence = analyzeKeywordPcm(audioBuffer, sampleRate)
         if (calculatedConfidence >= config.keywordConfidenceThreshold) {
             _detectionFlow.tryEmit(
@@ -23,6 +23,7 @@ class KeywordDetector(private val config: DetectionConfig) {
                 )
             )
         }
+        return calculatedConfidence
     }
 
     internal fun analyzeKeywordPcm(audioBuffer: ShortArray, sampleRate: Int): Float {
@@ -33,7 +34,7 @@ class KeywordDetector(private val config: DetectionConfig) {
         }
         val rms = Math.sqrt(energy / audioBuffer.size)
         val normalizedEnergy = (rms / 32768.0).toFloat()
-        return (normalizedEnergy * 2.5f).coerceAtMost(1.0f)
+        return (normalizedEnergy * 3.0f).coerceAtMost(1.0f)
     }
 }
 
@@ -42,7 +43,7 @@ class ScreamDetector(private val config: DetectionConfig) {
     private val _detectionFlow = MutableSharedFlow<SignalResult>(extraBufferCapacity = 64)
     val detectionFlow: Flow<SignalResult> = _detectionFlow.asSharedFlow()
 
-    fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000) {
+    fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000): Float {
         val screamConfidence = analyzeScreamAudio(audioBuffer, sampleRate)
         if (screamConfidence >= config.screamConfidenceThreshold) {
             _detectionFlow.tryEmit(
@@ -53,6 +54,7 @@ class ScreamDetector(private val config: DetectionConfig) {
                 )
             )
         }
+        return screamConfidence
     }
 
     internal fun analyzeScreamAudio(audioBuffer: ShortArray, sampleRate: Int): Float {
@@ -73,10 +75,11 @@ class ScreamDetector(private val config: DetectionConfig) {
         val zcr = zeroCrossings.toFloat() / audioBuffer.size.toFloat()
         val amplitudeRatio = maxAmplitude.toFloat() / 32768.0f
 
-        if (zcr in 0.10f..0.60f && amplitudeRatio > 0.50f) {
-            return (amplitudeRatio * 0.95f).coerceAtMost(1.0f)
+        // High zero-crossing frequency (scream / high pitch) combined with vocal acoustic intensity
+        if (zcr in 0.05f..0.65f && amplitudeRatio >= 0.30f) {
+            return (amplitudeRatio * 1.4f).coerceAtMost(1.0f)
         }
-        return 0.1f
+        return (amplitudeRatio * 0.2f).coerceAtMost(0.49f)
     }
 }
 
