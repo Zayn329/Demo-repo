@@ -66,6 +66,15 @@ class SafetyForegroundService : Service(), SensorEventListener {
         super.onCreate()
         createNotificationChannel()
 
+        // Initialize TFLite Scream Classifier from application assets
+        try {
+            val classifier = org.sahara.services.detection.tflite.TFLiteScreamClassifier(applicationContext)
+            screamDetector.tfliteClassifier = classifier
+            android.util.Log.d("SaharaDetection", "TFLite Scream Classifier initialized. Loaded=${classifier.isModelLoaded}, Version=${classifier.modelVersion}")
+        } catch (e: Throwable) {
+            android.util.Log.w("SaharaDetection", "Failed to load TFLite Scream Classifier, falling back to hybrid DSP mode: ${e.message}")
+        }
+
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         accelerometer?.let {

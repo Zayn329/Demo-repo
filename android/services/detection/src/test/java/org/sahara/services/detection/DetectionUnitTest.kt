@@ -48,14 +48,29 @@ class DetectionUnitTest {
     @Test
     fun testScreamDetectorFrequencyAnalysis() {
         val nonScreamAudio = ShortArray(1600) { (it % 100).toShort() }
-        val nonScreamConf = screamDetector.analyzeScreamAudio(nonScreamAudio, 16000)
+        val nonScreamConf = screamDetector.analyzeHybridAcousticFeatures(nonScreamAudio, 16000)
         assertTrue("Patterned low amp audio should not be scream", nonScreamConf < config.screamConfidenceThreshold)
 
         val screamAudio = ShortArray(1600) { i ->
             if (i % 4 == 0) 25000.toShort() else (-25000).toShort()
         }
-        val screamConf = screamDetector.analyzeScreamAudio(screamAudio, 16000)
+        val screamConf = screamDetector.analyzeHybridAcousticFeatures(screamAudio, 16000)
         assertTrue("High zero-crossing and loud amplitude is scream", screamConf >= config.screamConfidenceThreshold)
+    }
+
+    @Test
+    fun testTFLiteScreamClassifierDegradedFallbackAndModelStatus() {
+        val classifier = org.sahara.services.detection.tflite.TFLiteScreamClassifier(null)
+        assertFalse("Classifier initialized without context should not have loaded model", classifier.isModelLoaded)
+        assertEquals("YAMNet-TFLite-v1.0-AudioSet", classifier.modelVersion)
+
+        screamDetector.tfliteClassifier = classifier
+        assertFalse("ScreamDetector indicates model not loaded when uninitialized", screamDetector.isModelLoaded)
+        assertEquals("YAMNet-TFLite-v1.0-AudioSet", screamDetector.modelVersion)
+
+        val dummyAudio = ShortArray(1600) { 1000 }
+        val confidence = screamDetector.processAudioChunk(dummyAudio, 16000)
+        assertTrue("In degraded mode without TFLite model, processAudioChunk falls back gracefully to DSP confidence", confidence >= 0f)
     }
 
     @Test
