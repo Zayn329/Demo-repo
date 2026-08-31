@@ -47,7 +47,11 @@ import java.util.UUID
 enum class Screen {
     DASHBOARD,
     HELP_DIRECTORY,
-    VERIFIER
+    VERIFIER,
+    AUTH,
+    NOTIFY_CIRCLE,
+    LEGAL_DRAFTING,
+    ANCHORING
 }
 
 class MainActivity : ComponentActivity() {
@@ -126,6 +130,23 @@ class MainActivity : ComponentActivity() {
         var recentExportPackage by remember { mutableStateOf<ExportPackage?>(null) }
         val scope = rememberCoroutineScope()
 
+        var notifyContacts by remember {
+            mutableStateOf(
+                listOf(
+                    org.sahara.core.domain.models.NotifyContact(
+                        displayName = "Mom",
+                        type = org.sahara.core.domain.models.ContactType.SMS_ONLY,
+                        phoneNumber = "+91 9876543210"
+                    ),
+                    org.sahara.core.domain.models.NotifyContact(
+                        displayName = "Sister",
+                        type = org.sahara.core.domain.models.ContactType.SMS_ONLY,
+                        phoneNumber = "+91 9876543211"
+                    )
+                )
+            )
+        }
+
         when (currentScreen) {
             Screen.DASHBOARD -> {
                 MainDashboardScreen(
@@ -172,7 +193,39 @@ class MainActivity : ComponentActivity() {
                     },
                     incidentState = activeIncidentState,
                     onOpenHelpDirectory = { currentScreen = Screen.HELP_DIRECTORY },
-                    onOpenVerifier = { currentScreen = Screen.VERIFIER }
+                    onOpenVerifier = { currentScreen = Screen.VERIFIER },
+                    onOpenAuth = { currentScreen = Screen.AUTH },
+                    onOpenNotifyCircle = { currentScreen = Screen.NOTIFY_CIRCLE },
+                    onOpenLegalDrafting = { currentScreen = Screen.LEGAL_DRAFTING },
+                    onOpenAnchoring = { currentScreen = Screen.ANCHORING }
+                )
+            }
+            Screen.AUTH -> {
+                org.sahara.app.ui.AuthScreen(
+                    onBack = { currentScreen = Screen.DASHBOARD }
+                )
+            }
+            Screen.NOTIFY_CIRCLE -> {
+                org.sahara.app.ui.NotifyCircleScreen(
+                    contacts = notifyContacts,
+                    onAddContact = { name, phone ->
+                        notifyContacts = notifyContacts + org.sahara.core.domain.models.NotifyContact(
+                            displayName = name,
+                            type = org.sahara.core.domain.models.ContactType.SMS_ONLY,
+                            phoneNumber = phone
+                        )
+                    },
+                    onBack = { currentScreen = Screen.DASHBOARD }
+                )
+            }
+            Screen.LEGAL_DRAFTING -> {
+                org.sahara.app.ui.LegalDraftingScreen(
+                    onBack = { currentScreen = Screen.DASHBOARD }
+                )
+            }
+            Screen.ANCHORING -> {
+                org.sahara.app.ui.AnchoringScreen(
+                    onBack = { currentScreen = Screen.DASHBOARD }
                 )
             }
             Screen.HELP_DIRECTORY -> {
