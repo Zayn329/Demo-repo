@@ -22,9 +22,22 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.sahara.app.export.EvidenceExporter
 import org.sahara.app.export.ExportPackage
+import org.sahara.app.ui.ActiveIncidentScreen
+import org.sahara.app.ui.AnchoringScreen
+import org.sahara.app.ui.AuthScreen
 import org.sahara.app.ui.ExportVerifierScreen
 import org.sahara.app.ui.HelpDirectoryScreen
-import org.sahara.app.ui.MainDashboardScreen
+import org.sahara.app.ui.HomeDashboardScreen
+import org.sahara.app.ui.IncidentSealedScreen
+import org.sahara.app.ui.IncidentTimelineScreen
+import org.sahara.app.ui.NotifyCircleManagementScreen
+import org.sahara.app.ui.NotifyCircleSetupScreen
+import org.sahara.app.ui.PermissionsConsentScreen
+import org.sahara.app.ui.QuickPreferencesScreen
+import org.sahara.app.ui.SafetyWatchScreen
+import org.sahara.app.ui.SaharaTheme
+import org.sahara.app.ui.TrustedContactAlertScreen
+import org.sahara.app.ui.WelcomeScreen
 import org.sahara.core.data.db.SaharaDatabase
 import org.sahara.core.data.repository.AuditRepositoryImpl
 import org.sahara.core.data.repository.EvidenceRepositoryImpl
@@ -37,7 +50,6 @@ import org.sahara.features.incident.service.SafetyForegroundService
 import org.sahara.features.incident.statemachine.IncidentStateMachine
 import org.sahara.features.panic.controller.PanicController
 import org.sahara.services.evidence.engine.EvidenceCaptureEngine
-import org.sahara.services.evidence.manifest.EvidenceManifest
 import org.sahara.services.evidence.manifest.EvidenceManifestManager
 import org.sahara.services.evidence.manifest.EvidenceVerifier
 import org.sahara.services.evidence.preroll.BoundedAudioPreRollBuffer
@@ -45,11 +57,20 @@ import java.io.File
 import java.util.UUID
 
 enum class Screen {
-    DASHBOARD,
+    WELCOME,
+    PERMISSIONS,
+    CIRCLE_SETUP,
+    PREFERENCES,
+    HOME,
+    SAFETY_WATCH,
+    ACTIVE_INCIDENT,
+    INCIDENT_SEALED,
+    INCIDENT_TIMELINE,
+    TRUSTED_ALERT,
+    CIRCLE_MANAGE,
     HELP_DIRECTORY,
     VERIFIER,
     AUTH,
-    NOTIFY_CIRCLE,
     LEGAL_DRAFTING,
     ANCHORING
 }
@@ -116,30 +137,31 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    SaharaAppUi()
+                    SaharaAppNavigation()
                 }
             }
         }
     }
 
     @Composable
-    fun SaharaAppUi() {
-        var currentScreen by remember { mutableStateOf(Screen.DASHBOARD) }
-        var isMonitoringActive by remember { mutableStateOf(false) }
+    fun SaharaAppNavigation() {
+        var currentScreen by remember { mutableStateOf(Screen.HOME) }
+        var isMonitoringActive by remember { mutableStateOf(true) }
         var activeIncidentState by remember { mutableStateOf(IncidentState.IDLE) }
         var recentExportPackage by remember { mutableStateOf<ExportPackage?>(null) }
+        var elapsedIncidentSeconds by remember { mutableStateOf(18) }
         val scope = rememberCoroutineScope()
 
         var notifyContacts by remember {
             mutableStateOf(
                 listOf(
                     org.sahara.core.domain.models.NotifyContact(
-                        displayName = "Mom",
+                        displayName = "Aisha",
                         type = org.sahara.core.domain.models.ContactType.SMS_ONLY,
                         phoneNumber = "+91 9876543210"
                     ),
                     org.sahara.core.domain.models.NotifyContact(
-                        displayName = "Sister",
+                        displayName = "Sara",
                         type = org.sahara.core.domain.models.ContactType.SMS_ONLY,
                         phoneNumber = "+91 9876543211"
                     )
@@ -148,8 +170,32 @@ class MainActivity : ComponentActivity() {
         }
 
         when (currentScreen) {
-            Screen.DASHBOARD -> {
-                MainDashboardScreen(
+            Screen.WELCOME -> {
+                WelcomeScreen(
+                    onGetStarted = { currentScreen = Screen.PERMISSIONS },
+                    onLearnMore = { currentScreen = Screen.PERMISSIONS }
+                )
+            }
+            Screen.PERMISSIONS -> {
+                PermissionsConsentScreen(
+                    onContinue = { currentScreen = Screen.CIRCLE_SETUP },
+                    onBack = { currentScreen = Screen.WELCOME }
+                )
+            }
+            Screen.CIRCLE_SETUP -> {
+                NotifyCircleSetupScreen(
+                    onContinue = { currentScreen = Screen.PREFERENCES },
+                    onBack = { currentScreen = Screen.PERMISSIONS }
+                )
+            }
+            Screen.PREFERENCES -> {
+                QuickPreferencesScreen(
+                    onFinishSetup = { currentScreen = Screen.HOME },
+                    onBack = { currentScreen = Screen.CIRCLE_SETUP }
+                )
+            }
+            Screen.HOME -> {
+                HomeDashboardScreen(
                     isMonitoringActive = isMonitoringActive,
                     onToggleMonitoring = { enabled ->
                         isMonitoringActive = enabled
@@ -163,19 +209,45 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     },
-                    onPanicTriggered = {
+                    onStartSafetyWatch = {
+                        currentScreen = Screen.SAFETY_WATCH
+                    },
+                    onNeedHelp = {
                         scope.launch {
-                            panicController.triggerPanicImmediately("IN_APP_EMERGENCY_BUTTON")
+                            panicController.triggerPanicImmediately("IN_APP_HELP_BUTTON")
                             activeIncidentState = IncidentState.ACTIVE_INCIDENT
-
-                            // Drain pre-roll audio buffer into active incident evidence
                             val currentInc = stateMachine.currentIncident.value
                             if (currentInc != null) {
                                 captureEngine.processBufferedPreRoll(currentInc.incidentId)
                             }
+                            currentScreen = Screen.ACTIVE_INCIDENT
                         }
                     },
-                    onStopAndSealIncident = {
+                    onOpenCircle = { currentScreen = Screen.CIRCLE_MANAGE },
+                    onOpenRecords = { currentScreen = Screen.INCIDENT_TIMELINE },
+                    onOpenSettings = { currentScreen = Screen.PREFERENCES },
+                    onOpenDirectory = { currentScreen = Screen.HELP_DIRECTORY },
+                    onOpenVerifier = { currentScreen = Screen.VERIFIER },
+                    onOpenLegalDraft = { currentScreen = Screen.LEGAL_DRAFTING },
+                    onOpenAnchoring = { currentScreen = Screen.ANCHORING }
+                )
+            }
+            Screen.SAFETY_WATCH -> {
+                SafetyWatchScreen(
+                    onImSafe = { currentScreen = Screen.HOME },
+                    onNeedHelpNow = {
+                        scope.launch {
+                            panicController.triggerPanicImmediately("SAFETY_WATCH_HELP_NOW")
+                            activeIncidentState = IncidentState.ACTIVE_INCIDENT
+                            currentScreen = Screen.ACTIVE_INCIDENT
+                        }
+                    }
+                )
+            }
+            Screen.ACTIVE_INCIDENT -> {
+                ActiveIncidentScreen(
+                    elapsedSeconds = elapsedIncidentSeconds,
+                    onEndIncident = {
                         scope.launch {
                             val currentInc = stateMachine.currentIncident.value
                             if (currentInc != null) {
@@ -183,30 +255,38 @@ class MainActivity : ComponentActivity() {
                                 if (entries.isNotEmpty()) {
                                     val manifest = manifestManager.createAndSignManifest(currentInc, entries)
                                     stateMachine.sealIncident(manifest.merkleRoot)
-                                    activeIncidentState = IncidentState.SEALED
                                 } else {
                                     stateMachine.cancelIncident()
-                                    activeIncidentState = IncidentState.CANCELLED
                                 }
                             }
+                            currentScreen = Screen.INCIDENT_SEALED
                         }
-                    },
-                    incidentState = activeIncidentState,
-                    onOpenHelpDirectory = { currentScreen = Screen.HELP_DIRECTORY },
-                    onOpenVerifier = { currentScreen = Screen.VERIFIER },
-                    onOpenAuth = { currentScreen = Screen.AUTH },
-                    onOpenNotifyCircle = { currentScreen = Screen.NOTIFY_CIRCLE },
-                    onOpenLegalDrafting = { currentScreen = Screen.LEGAL_DRAFTING },
-                    onOpenAnchoring = { currentScreen = Screen.ANCHORING }
+                    }
                 )
             }
-            Screen.AUTH -> {
-                org.sahara.app.ui.AuthScreen(
-                    onBack = { currentScreen = Screen.DASHBOARD }
+            Screen.INCIDENT_SEALED -> {
+                IncidentSealedScreen(
+                    onViewRecord = { currentScreen = Screen.INCIDENT_TIMELINE },
+                    onShareCircle = { currentScreen = Screen.TRUSTED_ALERT },
+                    onReturnHome = { currentScreen = Screen.HOME }
                 )
             }
-            Screen.NOTIFY_CIRCLE -> {
-                org.sahara.app.ui.NotifyCircleScreen(
+            Screen.INCIDENT_TIMELINE -> {
+                IncidentTimelineScreen(
+                    onExportVerified = { currentScreen = Screen.VERIFIER },
+                    onBack = { currentScreen = Screen.HOME }
+                )
+            }
+            Screen.TRUSTED_ALERT -> {
+                TrustedContactAlertScreen(
+                    onCheckIn = { currentScreen = Screen.HOME },
+                    onCall = { /* Initiates phone call */ },
+                    onGetDirections = { /* Opens map */ },
+                    onBack = { currentScreen = Screen.HOME }
+                )
+            }
+            Screen.CIRCLE_MANAGE -> {
+                NotifyCircleManagementScreen(
                     contacts = notifyContacts,
                     onAddContact = { name, phone ->
                         notifyContacts = notifyContacts + org.sahara.core.domain.models.NotifyContact(
@@ -215,22 +295,15 @@ class MainActivity : ComponentActivity() {
                             phoneNumber = phone
                         )
                     },
-                    onBack = { currentScreen = Screen.DASHBOARD }
-                )
-            }
-            Screen.LEGAL_DRAFTING -> {
-                org.sahara.app.ui.LegalDraftingScreen(
-                    onBack = { currentScreen = Screen.DASHBOARD }
-                )
-            }
-            Screen.ANCHORING -> {
-                org.sahara.app.ui.AnchoringScreen(
-                    onBack = { currentScreen = Screen.DASHBOARD }
+                    onRemoveContact = { contact ->
+                        notifyContacts = notifyContacts.filterNot { it.displayName == contact.displayName }
+                    },
+                    onBack = { currentScreen = Screen.HOME }
                 )
             }
             Screen.HELP_DIRECTORY -> {
                 HelpDirectoryScreen(
-                    onBack = { currentScreen = Screen.DASHBOARD }
+                    onBack = { currentScreen = Screen.HOME }
                 )
             }
             Screen.VERIFIER -> {
@@ -280,8 +353,17 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     },
-                    onBack = { currentScreen = Screen.DASHBOARD }
+                    onBack = { currentScreen = Screen.HOME }
                 )
+            }
+            Screen.AUTH -> {
+                AuthScreen(onBack = { currentScreen = Screen.HOME })
+            }
+            Screen.LEGAL_DRAFTING -> {
+                org.sahara.app.ui.LegalDraftingScreen(onBack = { currentScreen = Screen.HOME })
+            }
+            Screen.ANCHORING -> {
+                AnchoringScreen(onBack = { currentScreen = Screen.HOME })
             }
         }
     }
@@ -293,9 +375,4 @@ class MainActivity : ComponentActivity() {
             isServiceBound = false
         }
     }
-}
-
-@Composable
-fun SaharaTheme(content: @Composable () -> Unit) {
-    MaterialTheme(content = content)
 }
