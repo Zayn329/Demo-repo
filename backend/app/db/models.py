@@ -28,6 +28,16 @@ class DBSyncEvent(Base):
     occurred_at = Column(BigInteger, nullable=False)
     payload = Column(JSON, nullable=False)
 
+class DBOtpRequest(Base):
+    __tablename__ = "otp_requests"
+
+    request_id = Column(String, primary_key=True, index=True)
+    phone_number = Column(String, index=True, nullable=False)
+    otp_code = Column(String, nullable=False)
+    attempts = Column(Integer, default=0)
+    expires_at = Column(BigInteger, nullable=False)
+    created_at = Column(BigInteger, nullable=False)
+
 class DBAnchor(Base):
     __tablename__ = "anchors"
 
