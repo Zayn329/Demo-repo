@@ -9,16 +9,26 @@ import org.sahara.services.detection.models.SignalResult
 
 class KeywordDetector(
     private val config: DetectionConfig,
-    val modelVersion: String = "TFLite-SpeechCommands-DSP-v1.0"
+    var tfliteClassifier: org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier? = null
 ) {
 
     private val _detectionFlow = MutableSharedFlow<SignalResult>(extraBufferCapacity = 64)
     val detectionFlow: Flow<SignalResult> = _detectionFlow.asSharedFlow()
 
-    var isModelLoaded: Boolean = true
+    val isModelLoaded: Boolean
+        get() = tfliteClassifier?.isModelLoaded ?: true
+
+    val modelVersion: String
+        get() = tfliteClassifier?.modelVersion ?: "TFLite-SpeechCommands-DSP-v1.0"
 
     fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000): Float {
-        val calculatedConfidence = analyzeKeywordPcm(audioBuffer, sampleRate)
+        val tfliteConfidence = tfliteClassifier?.classifyAudioFrame(audioBuffer, sampleRate) ?: -1f
+        val calculatedConfidence = if (tfliteConfidence >= 0f) {
+            tfliteConfidence
+        } else {
+            analyzeKeywordPcm(audioBuffer, sampleRate)
+        }
+
         if (calculatedConfidence >= config.keywordConfidenceThreshold) {
             _detectionFlow.tryEmit(
                 SignalResult(

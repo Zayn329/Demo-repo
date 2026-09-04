@@ -18,12 +18,29 @@ class TFLiteScreamClassifier(context: Context? = null) {
     var labels: List<String> = emptyList()
         private set
 
+    var screamLabelIndices: List<Int> = listOf(6, 9, 10, 11)
+        private set
+
     val modelVersion: String = "YAMNet-TFLite-v1.0-AudioSet"
 
     init {
         if (context != null) {
             loadModelAndLabels(context)
         }
+    }
+
+    fun updateLabels(newLabels: List<String>) {
+        labels = newLabels
+        screamLabelIndices = parseScreamLabelIndices(newLabels)
+    }
+
+    internal fun parseScreamLabelIndices(rawLabels: List<String>): List<Int> {
+        val targetKeywords = listOf("scream", "screaming", "shout", "yell", "children shouting", "bellow", "groan")
+        val matchedIndices = rawLabels.mapIndexedNotNull { index, label ->
+            val lowerLabel = label.lowercase()
+            if (targetKeywords.any { kw -> lowerLabel.contains(kw) }) index else null
+        }
+        return if (matchedIndices.isNotEmpty()) matchedIndices else listOf(6, 9, 10, 11)
     }
 
     fun loadModelAndLabels(context: Context) {
@@ -38,13 +55,14 @@ class TFLiteScreamClassifier(context: Context? = null) {
 
             interpreter = Interpreter(modelBuffer)
 
-            // Load labels
-            labels = assetManager.open("models/yamnet_labels.txt").bufferedReader().useLines { lines ->
+            // Load labels dynamically
+            val loadedLabels = assetManager.open("models/yamnet_labels.txt").bufferedReader().useLines { lines ->
                 lines.map { line ->
                     val parts = line.split(":", limit = 2)
                     if (parts.size == 2) parts[1].trim().removeSurrounding("\"") else line
                 }.toList()
             }
+            updateLabels(loadedLabels)
 
             isModelLoaded = true
         } catch (e: Throwable) {
@@ -70,10 +88,9 @@ class TFLiteScreamClassifier(context: Context? = null) {
             val outputScores = Array(1) { FloatArray(labels.size.coerceAtLeast(521)) }
             interpreter?.run(inputBuffer, outputScores)
 
-            // Evaluate scream / yell / shout classes (indices ~6: Shout, 9: Yell, 11: Screaming)
-            val screamIndices = listOf(6, 9, 10, 11)
+            // Evaluate scream / yell / shout classes derived dynamically from labels
             var maxScreamScore = 0f
-            for (idx in screamIndices) {
+            for (idx in screamLabelIndices) {
                 if (idx < outputScores[0].size) {
                     val score = outputScores[0][idx]
                     if (score > maxScreamScore) {

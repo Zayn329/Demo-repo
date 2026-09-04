@@ -35,6 +35,21 @@ class DetectionUnitTest {
     }
 
     @Test
+    fun testTFLiteSpeechCommandsClassifierFallbackAndIntegration() {
+        val speechClassifier = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier(null)
+        assertFalse("Classifier initialized without context should not have loaded model", speechClassifier.isModelLoaded)
+        assertEquals("TFLite-SpeechCommands-v1.0", speechClassifier.modelVersion)
+
+        keywordDetector.tfliteClassifier = speechClassifier
+        assertFalse("KeywordDetector indicates model is not loaded when uninitialized", keywordDetector.isModelLoaded)
+        assertEquals("TFLite-SpeechCommands-v1.0", keywordDetector.modelVersion)
+
+        val loudAudio = ShortArray(1600) { 20000 }
+        val confidence = keywordDetector.processAudioChunk(loudAudio, 16000)
+        assertTrue("When TFLite speech model is unavailable, falls back to PCM RMS energy calculation", confidence >= config.keywordConfidenceThreshold)
+    }
+
+    @Test
     fun testKeywordDetectorThreshold() {
         val quietAudio = ShortArray(1600) { 100 }
         val confidenceLow = keywordDetector.analyzeKeywordPcm(quietAudio, 16000)
@@ -56,6 +71,15 @@ class DetectionUnitTest {
         }
         val screamConf = screamDetector.analyzeHybridAcousticFeatures(screamAudio, 16000)
         assertTrue("High zero-crossing and loud amplitude is scream", screamConf >= config.screamConfidenceThreshold)
+    }
+
+    @Test
+    fun testDynamicLabelIndexLookup() {
+        val classifier = org.sahara.services.detection.tflite.TFLiteScreamClassifier(null)
+        val sampleLabels = listOf("Speech", "Music", "Silence", "Dog Bark", "Shout", "Cat Meow", "Screaming")
+        classifier.updateLabels(sampleLabels)
+
+        assertEquals(listOf(4, 6), classifier.screamLabelIndices)
     }
 
     @Test
