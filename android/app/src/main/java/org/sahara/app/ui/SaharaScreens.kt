@@ -1,6 +1,9 @@
 package org.sahara.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -35,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1583,6 +1587,9 @@ fun NotifyCircleManagementScreen(
 ) {
     var newName by remember { mutableStateOf("") }
     var newPhone by remember { mutableStateOf("") }
+    var syncStatus by remember { mutableStateOf<String?>(null) }
+    var isSyncing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -1681,6 +1688,42 @@ fun NotifyCircleManagementScreen(
                     text = "🛡️ Contacts are notified only when an incident is triggered or during proactive Safety Watch.",
                     style = MaterialTheme.typography.bodySmall,
                     color = SaharaColors.BlueMuted
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            SaharaSecondaryButton(
+                text = if (isSyncing) "Syncing..." else "Sync Circle to Backend 🔄",
+                onClick = {
+                    scope.launch {
+                        isSyncing = true
+                        try {
+                            val memberJsons = contacts.map { contact ->
+                                val contactId = contact.contactId.toString()
+                                "{\"contact_id\":\"$contactId\",\"display_name\":\"${contact.displayName}\",\"type\":\"${contact.type}\",\"phone_number\":${if (contact.phoneNumber != null) "\"${contact.phoneNumber}\"" else "null"},\"app_user_id\":null,\"location_permission\":${contact.locationPermission},\"notification_permission\":${contact.notificationPermission}}"
+                            }.joinToString(",")
+                            val body = "{\"members\":[$memberJsons]}"
+                            val token = SaharaApiClient.savedAccessToken ?: "bearer_demo_token"
+                            SaharaApiClient.putJson("/api/v1/notify/circle", body, bearerToken = token)
+                            syncStatus = "Circle Synced Successfully ✓"
+                        } catch (e: Exception) {
+                            syncStatus = "Sync Failed: ${e.message}"
+                        } finally {
+                            isSyncing = false
+                        }
+                    }
+                }
+            )
+
+            if (syncStatus != null) {
+                Text(
+                    text = syncStatus!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (syncStatus!!.contains("Successfully")) SaharaColors.SuccessGreen else SaharaColors.DangerCoral,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
@@ -1833,7 +1876,11 @@ fun ExportVerifierScreen(
 @Composable
 fun LegalDraftingScreen(onBack: () -> Unit) {
     var incidentSummary by remember { mutableStateOf("Distress signal triggered near Bandra West. High pitch scream detected, panic button activated.") }
+    var victimName by remember { mutableStateOf("Maya Sharma") }
+    var locationText by remember { mutableStateOf("Bandra West, Mumbai") }
     var generatedDraft by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -1873,31 +1920,52 @@ fun LegalDraftingScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp)
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = victimName,
+                    onValueChange = { victimName = it },
+                    placeholder = { Text("Victim Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = locationText,
+                    onValueChange = { locationText = it },
+                    placeholder = { Text("Location") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    singleLine = true
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 SaharaPrimaryButton(
-                    text = "Generate FIR Draft",
+                    text = if (isLoading) "Generating AI Draft..." else "Generate FIR Draft",
                     onClick = {
-                        generatedDraft = """
-                            MANDATORY DISCLAIMER: DRAFT FOR HUMAN AND LEGAL REVIEW. THIS DOCUMENT HAS NOT BEEN FILED WITH ANY AUTHORITY.
-
-                            FORMAL POLICE COMPLAINT DRAFT (FIR)
-                            ------------------------------------
-                            To,
-                            The Station House Officer,
-                            Local Police Station, Mumbai.
-
-                            SUBJECT: Complaint regarding safety distress incident on 2026-09-01.
-
-                            Respected Sir/Madam,
-                            I am submitting this formal complaint regarding an emergency safety incident recorded on 2026-09-01.
-
-                            FACTS:
-                            1. Incident Summary: $incidentSummary
-                            2. Cryptographic Evidence: Encrypted audio pre-roll and sensor logs sealed locally with SHA-256 Merkle Root.
-
-                            PRAYER:
-                            I request you to take immediate legal cognizance of this matter and initiate appropriate action.
-                        """.trimIndent()
+                        scope.launch {
+                            isLoading = true
+                            try {
+                                val escSummary = incidentSummary.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                                val escName = victimName.replace("\\", "\\\\").replace("\"", "\\\"")
+                                val escLoc = locationText.replace("\\", "\\\\").replace("\"", "\\\"")
+                                val body = "{\"incident_summary\":\"$escSummary\",\"victim_name\":\"$escName\",\"location_text\":\"$escLoc\"}"
+                                val token = SaharaApiClient.savedAccessToken ?: "bearer_demo_token"
+                                val responseJson = SaharaApiClient.postJson("/api/v1/legal/drafts", body, bearerToken = token)
+                                val textMatch = Regex("\"generated_text\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                val disclaimerMatch = Regex("\"legal_disclaimer\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                if (textMatch != null) {
+                                    val text = textMatch.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
+                                    val disclaimer = disclaimerMatch?.groupValues?.get(1)?.replace("\\n", "\n") ?: ""
+                                    generatedDraft = "$disclaimer\n\n$text"
+                                } else {
+                                    generatedDraft = responseJson
+                                }
+                            } catch (e: Exception) {
+                                generatedDraft = "Error generating draft from backend: ${e.message}"
+                            } finally {
+                                isLoading = false
+                            }
+                        }
                     }
                 )
             }
@@ -1936,6 +2004,8 @@ fun AnchoringScreen(onBack: () -> Unit) {
     var merkleRootInput by remember { mutableStateOf("0x3f7a8b9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a") }
     var anchorStatus by remember { mutableStateOf("NOT_ANCHORED") }
     var txHash by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -1978,10 +2048,30 @@ fun AnchoringScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(14.dp))
                 SaharaPrimaryButton(
-                    text = "Anchor Merkle Root",
+                    text = if (isLoading) "Anchoring..." else "Anchor Merkle Root",
                     onClick = {
-                        anchorStatus = "ANCHORED_SUCCESSFULLY (200 OK)"
-                        txHash = "0x" + System.currentTimeMillis().toString(16) + "8f9a"
+                        scope.launch {
+                            isLoading = true
+                            try {
+                                val nowSeconds = System.currentTimeMillis() / 1000
+                                val body = "{\"merkle_root\":\"${merkleRootInput.trim()}\",\"device_signature\":\"sig_device_dummy\",\"timestamp\":$nowSeconds}"
+                                val token = SaharaApiClient.savedAccessToken ?: "bearer_demo_token"
+                                val responseJson = SaharaApiClient.postJson("/api/v1/anchors", body, bearerToken = token)
+                                val statusMatch = Regex("\"status\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                val txMatch = Regex("\"transaction_hash\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                if (statusMatch != null) {
+                                    val statusStr = statusMatch.groupValues[1]
+                                    anchorStatus = "ANCHORED ($statusStr)"
+                                    txHash = txMatch?.groupValues?.get(1)
+                                } else {
+                                    anchorStatus = "ANCHORED: $responseJson"
+                                }
+                            } catch (e: Exception) {
+                                anchorStatus = "Anchoring Failed: ${e.message}"
+                            } finally {
+                                isLoading = false
+                            }
+                        }
                     }
                 )
                 Spacer(modifier = Modifier.height(14.dp))
@@ -1994,12 +2084,72 @@ fun AnchoringScreen(onBack: () -> Unit) {
     }
 }
 
+object SaharaApiClient {
+    var baseUrl = "http://10.0.2.2:8000"
+    var savedAccessToken: String? = null
+
+    suspend fun postJson(endpoint: String, jsonBody: String, bearerToken: String? = savedAccessToken): String = withContext(Dispatchers.IO) {
+        val url = java.net.URL("$baseUrl$endpoint")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Accept", "application/json")
+        if (!bearerToken.isNullOrBlank()) {
+            conn.setRequestProperty("Authorization", "Bearer $bearerToken")
+        }
+        conn.doOutput = true
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+
+        conn.outputStream.use { os ->
+            os.write(jsonBody.toByteArray(Charsets.UTF_8))
+        }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val response = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        if (code !in 200..299) {
+            throw java.io.IOException("HTTP $code: $response")
+        }
+        response
+    }
+
+    suspend fun putJson(endpoint: String, jsonBody: String, bearerToken: String? = savedAccessToken): String = withContext(Dispatchers.IO) {
+        val url = java.net.URL("$baseUrl$endpoint")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "PUT"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Accept", "application/json")
+        if (!bearerToken.isNullOrBlank()) {
+            conn.setRequestProperty("Authorization", "Bearer $bearerToken")
+        }
+        conn.doOutput = true
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+
+        conn.outputStream.use { os ->
+            os.write(jsonBody.toByteArray(Charsets.UTF_8))
+        }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val response = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        if (code !in 200..299) {
+            throw java.io.IOException("HTTP $code: $response")
+        }
+        response
+    }
+}
+
 @Composable
 fun AuthScreen(onBack: () -> Unit) {
     var phoneNumber by remember { mutableStateOf("+91 9876543210") }
     var otpCode by remember { mutableStateOf("") }
     var isOtpSent by remember { mutableStateOf(false) }
     var authStatus by remember { mutableStateOf("NOT_AUTHENTICATED") }
+    var requestId by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -2042,10 +2192,28 @@ fun AuthScreen(onBack: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 SaharaPrimaryButton(
-                    text = "Request OTP Code",
+                    text = if (isLoading && !isOtpSent) "Requesting OTP..." else "Request OTP Code",
                     onClick = {
-                        isOtpSent = true
-                        authStatus = "OTP_SENT"
+                        scope.launch {
+                            isLoading = true
+                            try {
+                                val body = "{\"phone_number\":\"${phoneNumber.trim()}\"}"
+                                val responseJson = SaharaApiClient.postJson("/api/v1/auth/request-otp", body)
+                                val reqIdMatch = Regex("\"request_id\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                if (reqIdMatch != null) {
+                                    requestId = reqIdMatch.groupValues[1]
+                                    isOtpSent = true
+                                    authStatus = "OTP_SENT (ReqID: ${requestId.take(8)}...)"
+                                } else {
+                                    authStatus = "OTP Request Sent: $responseJson"
+                                    isOtpSent = true
+                                }
+                            } catch (e: Exception) {
+                                authStatus = "OTP Request Failed: ${e.message}"
+                            } finally {
+                                isLoading = false
+                            }
+                        }
                     }
                 )
 
@@ -2062,10 +2230,28 @@ fun AuthScreen(onBack: () -> Unit) {
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     SaharaSecondaryButton(
-                        text = "Verify Code",
+                        text = if (isLoading) "Verifying..." else "Verify Code",
                         onClick = {
-                            if (otpCode.length >= 4) {
-                                authStatus = "AUTHENTICATED (User: usr_12345)"
+                            scope.launch {
+                                isLoading = true
+                                try {
+                                    val body = "{\"request_id\":\"$requestId\",\"otp_code\":\"${otpCode.trim()}\"}"
+                                    val responseJson = SaharaApiClient.postJson("/api/v1/auth/verify-otp", body)
+                                    val tokenMatch = Regex("\"access_token\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                    val userMatch = Regex("\"user_id\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                    if (tokenMatch != null) {
+                                        val token = tokenMatch.groupValues[1]
+                                        val userId = userMatch?.groupValues?.get(1) ?: "unknown"
+                                        SaharaApiClient.savedAccessToken = token
+                                        authStatus = "AUTHENTICATED (User: $userId)"
+                                    } else {
+                                        authStatus = "VERIFIED: $responseJson"
+                                    }
+                                } catch (e: Exception) {
+                                    authStatus = "Verification Failed: ${e.message}"
+                                } finally {
+                                    isLoading = false
+                                }
                             }
                         }
                     )
