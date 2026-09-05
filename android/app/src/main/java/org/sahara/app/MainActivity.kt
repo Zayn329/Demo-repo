@@ -311,45 +311,36 @@ class MainActivity : ComponentActivity() {
                     exportPackage = recentExportPackage,
                     onVerifyPackage = {
                         scope.launch {
-                            val incident = stateMachine.currentIncident.value
-                            if (incident == null) {
-                                val dummyUnsealedIncident = Incident(
-                                    incidentId = UUID.randomUUID(),
-                                    state = IncidentState.ACTIVE_INCIDENT
-                                )
-                                recentExportPackage = EvidenceExporter.createExportPackage(
-                                    incident = dummyUnsealedIncident,
-                                    manifest = null,
-                                    evidenceEntries = emptyList(),
-                                    outputDir = filesDir,
-                                    isIntegrityVerified = false
-                                )
-                            } else {
-                                val entries = evidenceRepository.getEvidenceForIncident(incident.incidentId).first()
-                                if (entries.isEmpty() || incident.state != IncidentState.SEALED) {
+                            val allIncidents = incidentRepository.getAllIncidents().first()
+                            val targetIncident = stateMachine.currentIncident.value ?: allIncidents.lastOrNull()
+                            if (targetIncident != null) {
+                                val entries = evidenceRepository.getEvidenceForIncident(targetIncident.incidentId).first()
+                                if (entries.isEmpty() || targetIncident.state != IncidentState.SEALED) {
                                     recentExportPackage = EvidenceExporter.createExportPackage(
-                                        incident = incident,
+                                        incident = targetIncident,
                                         manifest = null,
                                         evidenceEntries = entries,
                                         outputDir = filesDir,
                                         isIntegrityVerified = false
                                     )
                                 } else {
-                                    val manifest = manifestManager.createAndSignManifest(incident, entries)
+                                    val manifest = manifestManager.createAndSignManifest(targetIncident, entries)
                                     val isVerified = EvidenceVerifier.verifyPackageIntegrity(
                                         manifest = manifest,
                                         evidenceEntries = entries,
                                         keyStorageManager = keyManager,
-                                        incidentState = incident.state
+                                        incidentState = targetIncident.state
                                     )
                                     recentExportPackage = EvidenceExporter.createExportPackage(
-                                        incident = incident,
+                                        incident = targetIncident,
                                         manifest = manifest,
                                         evidenceEntries = entries,
                                         outputDir = filesDir,
                                         isIntegrityVerified = isVerified
                                     )
                                 }
+                            } else {
+                                recentExportPackage = null
                             }
                         }
                     },
