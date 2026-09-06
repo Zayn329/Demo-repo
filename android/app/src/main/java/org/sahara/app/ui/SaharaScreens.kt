@@ -46,6 +46,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -570,6 +573,7 @@ fun QuickPreferencesScreen(
 @Composable
 fun HomeDashboardScreen(
     isMonitoringActive: Boolean,
+    recentIncidentsCount: Int = 0,
     onToggleMonitoring: (Boolean) -> Unit,
     onStartSafetyWatch: () -> Unit,
     onNeedHelp: () -> Unit,
@@ -714,7 +718,9 @@ fun HomeDashboardScreen(
 
             // Recent Activity
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenRecords() },
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = SaharaColors.PureWhite)
             ) {
@@ -733,7 +739,7 @@ fun HomeDashboardScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Everything looks quiet.",
+                            text = if (recentIncidentsCount > 0) "$recentIncidentsCount recorded incident(s) sealed locally." else "Everything looks quiet.",
                             style = MaterialTheme.typography.bodySmall,
                             color = SaharaColors.TextSecondary
                         )
@@ -1737,6 +1743,7 @@ fun NotifyCircleManagementScreen(
 @Composable
 fun HelpDirectoryScreen(onBack: () -> Unit) {
     val contacts = OfflineHelpDirectory.getAllContacts()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
@@ -1768,7 +1775,14 @@ fun HelpDirectoryScreen(onBack: () -> Unit) {
         ) {
             items(contacts) { contact ->
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            try {
+                                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${contact.phone}"))
+                                context.startActivity(intent)
+                            } catch (_: Exception) {}
+                        },
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = SaharaColors.PureWhite)
                 ) {
@@ -1779,9 +1793,9 @@ fun HelpDirectoryScreen(onBack: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(text = contact.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            SaharaStatusBadge(text = contact.phone, style = BadgeStyle.INFO)
+                            SaharaStatusBadge(text = "📞 ${contact.phone}", style = BadgeStyle.INFO)
                         }
-                        Text(text = "City: ${contact.city}", style = MaterialTheme.typography.bodySmall, color = SaharaColors.TextSecondary)
+                        Text(text = "City: ${contact.city} · Tap to call", style = MaterialTheme.typography.bodySmall, color = SaharaColors.TextSecondary)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(text = contact.description, style = MaterialTheme.typography.bodySmall)
                     }
@@ -2193,6 +2207,7 @@ fun AuthScreen(onBack: () -> Unit) {
                 Spacer(modifier = Modifier.height(12.dp))
                 SaharaPrimaryButton(
                     text = if (isLoading && !isOtpSent) "Requesting OTP..." else "Request OTP Code",
+                    enabled = phoneNumber.trim().length >= 8,
                     onClick = {
                         scope.launch {
                             isLoading = true
@@ -2216,6 +2231,16 @@ fun AuthScreen(onBack: () -> Unit) {
                         }
                     }
                 )
+
+                if (isLoading) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = SaharaColors.PinkPrimary
+                        )
+                    }
+                }
 
                 if (isOtpSent) {
                     Spacer(modifier = Modifier.height(16.dp))

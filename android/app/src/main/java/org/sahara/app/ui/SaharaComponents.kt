@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -77,8 +79,12 @@ fun SaharaPrimaryButton(
     enabled: Boolean = true,
     isDanger: Boolean = false
 ) {
+    val haptic = LocalHapticFeedback.current
     Button(
-        onClick = onClick,
+        onClick = {
+            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Throwable) {}
+            onClick()
+        },
         enabled = enabled,
         modifier = modifier
             .fillMaxWidth()
@@ -505,9 +511,11 @@ fun SaharaHoldToActivateButton(
 ) {
     var progress by remember { mutableFloatStateOf(0f) }
     var isHolding by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     LaunchedEffect(isHolding) {
         if (isHolding) {
+            try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Throwable) {}
             val stepTime = 30L
             val totalSteps = holdDurationMs / stepTime
             for (i in 1..totalSteps) {
@@ -519,6 +527,7 @@ fun SaharaHoldToActivateButton(
                 progress = i / totalSteps.toFloat()
             }
             if (progress >= 1f) {
+                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Throwable) {}
                 onHoldComplete()
                 progress = 0f
                 isHolding = false

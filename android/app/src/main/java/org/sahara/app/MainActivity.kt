@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -150,7 +151,15 @@ class MainActivity : ComponentActivity() {
         var activeIncidentState by remember { mutableStateOf(IncidentState.IDLE) }
         var recentExportPackage by remember { mutableStateOf<ExportPackage?>(null) }
         var elapsedIncidentSeconds by remember { mutableStateOf(18) }
+        var recordedIncidentsCount by remember { mutableStateOf(0) }
         val scope = rememberCoroutineScope()
+
+        LaunchedEffect(currentScreen) {
+            try {
+                val incidents = incidentRepository.getAllIncidents().first()
+                recordedIncidentsCount = incidents.size
+            } catch (_: Exception) {}
+        }
 
         var notifyContacts by remember {
             mutableStateOf(
@@ -197,6 +206,7 @@ class MainActivity : ComponentActivity() {
             Screen.HOME -> {
                 HomeDashboardScreen(
                     isMonitoringActive = isMonitoringActive,
+                    recentIncidentsCount = recordedIncidentsCount,
                     onToggleMonitoring = { enabled ->
                         isMonitoringActive = enabled
                         scope.launch {
