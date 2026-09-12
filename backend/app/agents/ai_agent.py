@@ -45,7 +45,7 @@ class AIAgent:
 
         provider = os.getenv("LLM_PROVIDER", "groq").lower()
         url = "https://api.groq.com/openai/v1/chat/completions"
-        model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+        model = os.getenv("LLM_MODEL", "openai/gpt-oss-20b")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -66,7 +66,7 @@ class AIAgent:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
         try:
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=15) as response:
                 if response.status == 200:
                     res_body = json.loads(response.read().decode("utf-8"))
                     choices = res_body.get("choices", [])
