@@ -41,8 +41,12 @@ import org.sahara.app.ui.TrustedContactAlertScreen
 import org.sahara.app.ui.WelcomeScreen
 import org.sahara.core.data.db.SaharaDatabase
 import org.sahara.core.data.repository.AuditRepositoryImpl
+import org.sahara.core.data.repository.ContactRepositoryImpl
 import org.sahara.core.data.repository.EvidenceRepositoryImpl
 import org.sahara.core.data.repository.IncidentRepositoryImpl
+import org.sahara.features.notifycircle.manager.NotifyCircleManager
+import org.sahara.services.mesh.fallback.EscalationFallbackManager
+import org.sahara.services.mesh.relay.NearbyConnectionsMeshRelay
 import org.sahara.core.domain.models.Incident
 import org.sahara.core.domain.models.IncidentState
 import org.sahara.core.security.crypto.AesGcmFileStorage
@@ -114,6 +118,7 @@ class MainActivity : ComponentActivity() {
         incidentRepository = IncidentRepositoryImpl(database.incidentDao())
         evidenceRepository = EvidenceRepositoryImpl(database.evidenceDao())
         auditRepository = AuditRepositoryImpl(database.auditEventDao())
+        val contactRepository = ContactRepositoryImpl(database.notifyContactDao())
 
         stateMachine = IncidentStateMachine(incidentRepository, auditRepository)
         panicController = PanicController(stateMachine)
@@ -126,6 +131,31 @@ class MainActivity : ComponentActivity() {
 
         captureEngine = EvidenceCaptureEngine(evidenceRepository, keyManager, gcmStorage, preRollBuffer, storageDir)
         manifestManager = EvidenceManifestManager(incidentRepository, keyManager)
+
+        val meshRelay = NearbyConnectionsMeshRelay()
+        val smsProvider = EscalationFallbackManager.createSmsProvider(isDebug = true)
+        val fallbackManager = EscalationFallbackManager(meshRelay, smsProvider, isDebug = true)
+        val notifyCircleManager = NotifyCircleManager(contactRepository, auditRepository, fallbackManager)
+
+        stateMachine.onIncidentActivated = { incident ->
+            try {
+                captureEngine.processBufferedPreRoll(incident.incidentId)
+            } catch (e: Throwable) {
+                android.util.Log.e("Sahara", "Pre-roll capture error: ${e.message}")
+            }
+            try {
+                val refCode = "SAHARA-${incident.incidentId.toString().take(6).uppercase()}"
+                notifyCircleManager.dispatchAlert(
+                    incidentId = incident.incidentId,
+                    locationText = "Bandra West, Mumbai",
+                    locationAgeSeconds = 0,
+                    evidenceHash = incident.finalMerkleRoot ?: "ACTIVE_${incident.incidentId.toString().take(8)}",
+                    referenceCode = refCode
+                )
+            } catch (e: Throwable) {
+                android.util.Log.e("Sahara", "Notification dispatch error: ${e.message}")
+            }
+        }
 
         // Bind SafetyForegroundService
         val serviceIntent = Intent(this, SafetyForegroundService::class.java)
@@ -226,10 +256,6 @@ class MainActivity : ComponentActivity() {
                         scope.launch {
                             panicController.triggerPanicImmediately("IN_APP_HELP_BUTTON")
                             activeIncidentState = IncidentState.ACTIVE_INCIDENT
-                            val currentInc = stateMachine.currentIncident.value
-                            if (currentInc != null) {
-                                captureEngine.processBufferedPreRoll(currentInc.incidentId)
-                            }
                             currentScreen = Screen.ACTIVE_INCIDENT
                         }
                     },
@@ -261,10 +287,11 @@ class MainActivity : ComponentActivity() {
                         scope.launch {
                             val currentInc = stateMachine.currentIncident.value
                             if (currentInc != null) {
+                                captureEngine.processBufferedPreRoll(currentInc.incidentId)
                                 val entries = evidenceRepository.getEvidenceForIncident(currentInc.incidentId).first()
                                 if (entries.isNotEmpty()) {
                                     val manifest = manifestManager.createAndSignManifest(currentInc, entries)
-                                    stateMachine.sealIncident(manifest.merkleRoot)
+                                    stateMachine.sealIncident(manifest.merkleRoot, manifest.sealedAt)
                                 } else {
                                     stateMachine.cancelIncident()
                                 }

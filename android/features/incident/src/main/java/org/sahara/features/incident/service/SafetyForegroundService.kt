@@ -168,7 +168,8 @@ class SafetyForegroundService : Service(), SensorEventListener {
                         val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                         if (readSize > 0) {
                             val chunk = AudioChunk("chunk_${System.currentTimeMillis()}", buffer.clone())
-                            preRollBuffer.offerChunk(chunk)
+                            val targetBuffer = evidenceCaptureEngine?.preRollBuffer ?: preRollBuffer
+                            targetBuffer.offerChunk(chunk)
 
                             val kwConf = keywordDetector.processAudioChunk(buffer, sampleRate)
                             val screamConf = screamDetector.processAudioChunk(buffer, sampleRate)

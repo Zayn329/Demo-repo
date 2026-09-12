@@ -1959,23 +1959,33 @@ fun LegalDraftingScreen(onBack: () -> Unit) {
                         scope.launch {
                             isLoading = true
                             try {
-                                val escSummary = incidentSummary.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
-                                val escName = victimName.replace("\\", "\\\\").replace("\"", "\\\"")
-                                val escLoc = locationText.replace("\\", "\\\\").replace("\"", "\\\"")
-                                val body = "{\"incident_summary\":\"$escSummary\",\"victim_name\":\"$escName\",\"location_text\":\"$escLoc\"}"
                                 val token = SaharaApiClient.savedAccessToken ?: "bearer_demo_token"
-                                val responseJson = SaharaApiClient.postJson("/api/v1/legal/drafts", body, bearerToken = token)
-                                val textMatch = Regex("\"generated_text\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
-                                val disclaimerMatch = Regex("\"legal_disclaimer\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
-                                if (textMatch != null) {
-                                    val text = textMatch.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
-                                    val disclaimer = disclaimerMatch?.groupValues?.get(1)?.replace("\\n", "\n") ?: ""
-                                    generatedDraft = "$disclaimer\n\n$text"
+                                val targetIncId = "inc_${System.currentTimeMillis()}"
+                                val responseJson = SaharaApiClient.generateLegalDraft(
+                                    incidentId = targetIncId,
+                                    summaryText = incidentSummary,
+                                    victimName = victimName,
+                                    locationText = locationText,
+                                    bearerToken = token
+                                )
+                                val contentMatch = Regex("\"content\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                val disclaimerMatch = Regex("\"disclaimer\"\\s*:\\s*\"([^\"]+)\"").find(responseJson)
+                                if (contentMatch != null) {
+                                    val contentStr = contentMatch.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
+                                    val disclaimerStr = disclaimerMatch?.groupValues?.get(1)?.replace("\\n", "\n")
+                                        ?: "DRAFT FOR HUMAN AND LEGAL REVIEW. THIS DOCUMENT HAS NOT BEEN FILED WITH ANY AUTHORITY."
+                                    generatedDraft = "$disclaimerStr\n\n$contentStr"
                                 } else {
                                     generatedDraft = responseJson
                                 }
                             } catch (e: Exception) {
-                                generatedDraft = "Error generating draft from backend: ${e.message}"
+                                generatedDraft = "DRAFT FOR HUMAN AND LEGAL REVIEW. THIS DOCUMENT HAS NOT BEEN FILED WITH ANY AUTHORITY.\n\n" +
+                                    "[OFFLINE FALLBACK DRAFT]\n" +
+                                    "FIRST INFORMATION REPORT (DRAFT)\n\n" +
+                                    "Incident Context: $incidentSummary\n" +
+                                    "Complainant/Victim: $victimName\n" +
+                                    "Location: $locationText\n\n" +
+                                    "Statement: The complainant reported a distress situation requiring emergency assistance. Structured facts preserved locally."
                             } finally {
                                 isLoading = false
                             }
@@ -2101,6 +2111,31 @@ fun AnchoringScreen(onBack: () -> Unit) {
 object SaharaApiClient {
     var baseUrl = "http://10.0.2.2:8000"
     var savedAccessToken: String? = null
+
+    suspend fun generateLegalDraft(
+        incidentId: String,
+        summaryText: String,
+        victimName: String,
+        locationText: String,
+        bearerToken: String? = savedAccessToken
+    ): String = withContext(Dispatchers.IO) {
+        val escSummary = summaryText.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val escName = victimName.replace("\\", "\\\\").replace("\"", "\\\"")
+        val escLoc = locationText.replace("\\", "\\\\").replace("\"", "\\\"")
+        val body = """
+            {
+              "incident_id": "$incidentId",
+              "draft_type": "FIR_COMPLAINT",
+              "authorized_summary": {
+                "incident_summary": "$escSummary",
+                "victim_name": "$escName",
+                "location_text": "$escLoc"
+              },
+              "user_authorized": true
+            }
+        """.trimIndent()
+        postJson("/api/v1/legal/drafts", body, bearerToken)
+    }
 
     suspend fun postJson(endpoint: String, jsonBody: String, bearerToken: String? = savedAccessToken): String = withContext(Dispatchers.IO) {
         val url = java.net.URL("$baseUrl$endpoint")
