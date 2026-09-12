@@ -16,6 +16,8 @@ class IncidentStateMachine(
     private val auditRepository: AuditRepository
 ) {
 
+    var onIncidentActivated: (suspend (Incident) -> Unit)? = null
+
     private val _currentIncident = MutableStateFlow<Incident?>(null)
     val currentIncident: StateFlow<Incident?> = _currentIncident.asStateFlow()
 
@@ -65,6 +67,7 @@ class IncidentStateMachine(
 
     suspend fun activateIncident(triggerSource: String) {
         val existing = _currentIncident.value
+        val activatedIncident: Incident
         if (existing == null) {
             val incident = Incident(
                 state = IncidentState.ACTIVE_INCIDENT,
@@ -74,18 +77,23 @@ class IncidentStateMachine(
             _currentIncident.value = incident
             incidentRepository.saveIncident(incident)
             updateState(IncidentState.ACTIVE_INCIDENT, "ACTIVATE_INCIDENT_DIRECT", incident.incidentId)
+            activatedIncident = incident
         } else {
             if (_currentState.value != IncidentState.ACTIVE_INCIDENT && _currentState.value != IncidentState.SEALED) {
                 val updated = existing.copy(
                     state = IncidentState.ACTIVE_INCIDENT,
                     activatedAt = System.currentTimeMillis(),
-                    triggerSources = existing.triggerSources + triggerSource
+                    triggerSources = if (existing.triggerSources.contains(triggerSource)) existing.triggerSources else existing.triggerSources + triggerSource
                 )
                 _currentIncident.value = updated
                 incidentRepository.saveIncident(updated)
                 updateState(IncidentState.ACTIVE_INCIDENT, "ACTIVATE_INCIDENT", updated.incidentId)
+                activatedIncident = updated
+            } else {
+                activatedIncident = existing
             }
         }
+        onIncidentActivated?.invoke(activatedIncident)
     }
 
     suspend fun cancelIncident() {
@@ -98,12 +106,12 @@ class IncidentStateMachine(
         }
     }
 
-    suspend fun sealIncident(merkleRoot: String) {
+    suspend fun sealIncident(merkleRoot: String, sealedAt: Long = System.currentTimeMillis()) {
         val incident = _currentIncident.value
         if (incident != null && (_currentState.value == IncidentState.ACTIVE_INCIDENT || _currentState.value == IncidentState.CANCELLED)) {
             val updated = incident.copy(
                 state = IncidentState.SEALED,
-                sealedAt = System.currentTimeMillis(),
+                sealedAt = sealedAt,
                 finalMerkleRoot = merkleRoot
             )
             _currentIncident.value = updated

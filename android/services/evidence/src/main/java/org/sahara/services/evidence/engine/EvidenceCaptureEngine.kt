@@ -17,7 +17,7 @@ class EvidenceCaptureEngine(
     private val evidenceRepository: EvidenceRepository,
     private val keyStorageManager: KeyStorageManagerImpl,
     private val aesGcmStorage: AesGcmFileStorage,
-    private val preRollBuffer: BoundedAudioPreRollBuffer,
+    val preRollBuffer: BoundedAudioPreRollBuffer,
     private val storageDir: File
 ) {
 
