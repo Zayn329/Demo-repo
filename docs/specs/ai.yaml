@@ -1,0 +1,77 @@
+# =============================================================================
+# docs/specs/ai.yaml
+# =============================================================================
+# Specification for AI-Assisted Incident Features
+# =============================================================================
+
+version: "1.0"
+
+system: "Sahara Safety Companion AI Engine"
+
+capabilities:
+  fir_complaint_drafting:
+    purpose: "Converts verified structured incident data into FIR/complaint drafts."
+    endpoint: "/api/v1/legal/drafts"
+    disclaimer: "DRAFT FOR HUMAN AND LEGAL REVIEW. THIS DOCUMENT HAS NOT BEEN FILED WITH ANY AUTHORITY."
+
+  incident_summarization:
+    purpose: "Generates concise, structured summaries from verified incident events and evidence metadata."
+    endpoint: "/api/v1/ai/summaries"
+    disclaimer: "AI-GENERATED SUMMARY FOR INFORMATIONAL PURPOSES. REQUIRES HUMAN REVIEW."
+
+  timeline_reconstruction:
+    purpose: "Constructs chronological, plain-language timeline explanations from verified incident telemetry and event logs."
+    endpoint: "/api/v1/ai/timelines"
+    disclaimer: "AI-GENERATED TIMELINE EXPLANATION BASED ON VERIFIED EVENT TELEMETRY. REQUIRES HUMAN REVIEW."
+
+  evidence_aware_qa:
+    purpose: "Answers specific questions regarding incident events based strictly on authorized verified facts."
+    endpoint: "/api/v1/ai/qa"
+    disclaimer: "AI ASSISTANT ANSWER GROUNDED ONLY IN AUTHORIZED VERIFIED FACTS. MAY NOT BE USED AS SOLE LEGAL PROOF."
+
+  incident_report_generation:
+    purpose: "Produces comprehensive incident reports suitable for institutional, employer, or formal record-keeping."
+    endpoint: "/api/v1/ai/reports"
+    disclaimer: "AI-GENERATED INCIDENT REPORT. DRAFT FOR HUMAN AND LEGAL REVIEW."
+
+trust_boundary:
+  rule: "captured evidence/events -> integrity/verification -> verified structured facts -> AI -> human-readable output"
+  allowed_inputs:
+    - incident_id
+    - timestamp
+    - title / user narrative (clearly marked as user claims)
+    - verified event list (event_id, event_type, timestamp, payload metadata)
+    - evidence metadata (type, sha256 hash, chunk index, created_at)
+    - integrity metadata (Merkle root, signature reference)
+    - redacted approximate location (when authorized)
+  prohibited_inputs:
+    - raw_audio_bytes
+    - raw_video_bytes
+    - raw_sensor_stream_bytes
+    - encryption_keys_or_private_keys
+    - user_authentication_tokens
+    - internal_secrets
+
+grounding_and_integrity_rules:
+  - rule: "Zero fabrication of missing incident facts."
+    detail: "If information requested in Q&A or report generation is absent from input facts, the AI must explicitly state that the information is unknown or missing."
+  - rule: "Fact classification."
+    detail: "AI output must clearly distinguish verified cryptographic facts, user-provided claims, AI-generated explanations, and unavailable data."
+  - rule: "Evidence immutability."
+    detail: "AI output is a derived artifact and must NEVER modify, delete, overwrite, or re-sign original evidence, Merkle roots, or cryptographic manifests."
+  - rule: "Non-critical path."
+    detail: "AI workflows are strictly post-incident and must never participate in real-time distress detection, panic activation, evidence capture, or emergency escalation."
+
+failure_handling:
+  provider_unavailable:
+    status_code: 503
+    error_code: "AI_PROVIDER_UNAVAILABLE"
+    message: "The requested AI provider is currently unavailable. Core incident evidence and local summaries remain safe."
+  malformed_output:
+    status_code: 502
+    error_code: "AI_OUTPUT_VALIDATION_FAILED"
+    message: "AI provider returned malformed or ungrounded response."
+  unauthorized_user:
+    status_code: 400
+    error_code: "USER_AUTHORIZATION_REQUIRED"
+    message: "User explicit authorization is required before processing incident data through AI."
