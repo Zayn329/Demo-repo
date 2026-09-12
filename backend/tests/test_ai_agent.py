@@ -1,4 +1,6 @@
 import os
+import io
+import json
 import pytest
 from app.agents.ai_agent import AIAgent, AIProviderUnavailableError
 from app.models.schemas import (
@@ -130,3 +132,47 @@ def test_unauthorized_user_rejection(agent):
     with pytest.raises(ValueError) as exc:
         agent.generate_summary(req)
     assert "authorization required" in str(exc.value)
+
+def test_real_llm_provider_http_error_handling(agent, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "invalid_test_key_xyz")
+    req = AISummaryRequest(
+        incident_id="inc_llm_err",
+        authorized_summary={"title": "HTTP Error Test"},
+        user_authorized=True
+    )
+    with pytest.raises(AIProviderUnavailableError):
+        agent.generate_summary(req)
+
+def test_real_llm_provider_successful_response(agent, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "dummy_valid_api_key")
+
+    mock_llm_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": "LLM Generated Executive Summary for Sahara Incident."
+                }
+            }
+        ]
+    }
+
+    class MockHTTPResponse:
+        def __init__(self):
+            self.status = 200
+        def read(self):
+            return json.dumps(mock_llm_response).encode("utf-8")
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=10: MockHTTPResponse())
+
+    req = AISummaryRequest(
+        incident_id="inc_llm_ok",
+        authorized_summary={"title": "Mocked LLM Test"},
+        user_authorized=True
+    )
+    res = agent.generate_summary(req)
+    assert res.executive_summary == "LLM Generated Executive Summary for Sahara Incident."

@@ -1,6 +1,9 @@
 import os
 import time
 import uuid
+import json
+import urllib.request
+import urllib.error
 from typing import Dict, Any, List, Optional
 
 from app.models.schemas import (
@@ -35,6 +38,45 @@ class AIAgent:
         if os.getenv("AI_PROVIDER_UNAVAILABLE", "false").lower() == "true":
             raise AIProviderUnavailableError("The AI provider is currently unavailable.")
 
+    def _call_real_llm_provider(self, prompt: str, system_instruction: str) -> Optional[str]:
+        api_key = os.getenv("LLM_API_KEY")
+        if not api_key:
+            return None
+
+        provider = os.getenv("LLM_PROVIDER", "groq").lower()
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Sahara-Backend-AI-Agent/1.0"
+        }
+
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2
+        }
+
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                if response.status == 200:
+                    res_body = json.loads(response.read().decode("utf-8"))
+                    choices = res_body.get("choices", [])
+                    if choices and "message" in choices[0]:
+                        return choices[0]["message"].get("content", "").strip()
+        except Exception as e:
+            raise AIProviderUnavailableError(f"Real LLM Provider ({provider}) call failed: {str(e)}")
+
+        return None
+
     # 1. FIR / Legal Draft Generation
     def generate_legal_draft(self, request: LegalDraftRequest) -> LegalDraftResponse:
         self._check_provider_availability()
@@ -52,7 +94,18 @@ class AIAgent:
         trigger_sources = ", ".join(summary.get("trigger_sources", ["Automatic Detection"]))
         merkle_root = summary.get("merkle_root", "N/A")
 
-        if draft_type.upper() in ["FIR_COMPLAINT", "GENERIC_POLICE_COMPLAINT"]:
+        # Try real LLM provider if LLM_API_KEY is configured
+        prompt = (
+            f"Draft a formal complaint ({draft_type}) based on verified incident data:\n"
+            f"Incident ID: {incident_id}\nTitle: {title}\nDate: {date_str}\nLocation: {location_str}\n"
+            f"Triggers: {trigger_sources}\nMerkle Root: {merkle_root}"
+        )
+        system = "You are Sahara Legal Agent. You create structured FIR/complaint drafts from verified telemetry facts. Never fabricate unsupplied facts."
+        llm_result = self._call_real_llm_provider(prompt, system)
+
+        if llm_result:
+            draft_text = llm_result
+        elif draft_type.upper() in ["FIR_COMPLAINT", "GENERIC_POLICE_COMPLAINT"]:
             draft_text = (
                 f"FORMAL INCIDENT COMPLAINT DRAFT (FIR STYLE)\n"
                 f"-----------------------------------------\n"
@@ -104,7 +157,11 @@ class AIAgent:
         triggers = summary.get("trigger_sources", [])
         merkle_root = summary.get("merkle_root")
 
-        exec_summary = (
+        prompt = f"Summarize incident '{title}' at '{location_str}' on '{date_str}'. Triggers: {triggers}. Merkle root: {merkle_root}."
+        system = "You are Sahara AI Assistant. Produce concise executive summary of verified safety telemetry."
+        llm_result = self._call_real_llm_provider(prompt, system)
+
+        exec_summary = llm_result or (
             f"Incident '{title}' occurred on {date_str} near {location_str}. "
             f"Safety mechanisms activated via {', '.join(triggers) if triggers else 'automated distress signals'}. "
             f"Evidence was cryptographically sealed locally."
@@ -181,14 +238,12 @@ class AIAgent:
         grounded_facts: List[str] = []
         missing_facts: List[str] = []
 
-        # Analyze requested facts from verified input
         trigger_sources = facts.get("trigger_sources") or []
         events = facts.get("events") or []
         date_str = facts.get("date") or facts.get("timestamp")
         location_str = facts.get("location")
         merkle_root = facts.get("merkle_root")
 
-        # Check for ungrounded / missing domain questions (e.g. suspect details, weapon, vehicle, etc.)
         if any(unsupported in q_lower for unsupported in ["suspect", "license plate", "vehicle", "weapon", "attacker name"]):
             missing_facts.append(f"Details regarding '{request.question}' are not present in authorized verified telemetry.")
             answer = "Information regarding this question is unknown or missing from the authorized verified incident facts."
@@ -225,7 +280,6 @@ class AIAgent:
                 missing_facts.append("Merkle root missing.")
                 answer = "No Merkle integrity reference was provided in facts."
         else:
-            # Generic grounded answer based on facts summary
             if facts:
                 grounded_facts.append(f"Verified facts count: {len(facts)}")
                 answer = f"Based on verified facts: Incident ID {request.incident_id} includes records for {', '.join(facts.keys())}."
@@ -261,7 +315,11 @@ class AIAgent:
         triggers = ", ".join(summary.get("trigger_sources", ["Automated Detection"]))
         merkle_root = summary.get("merkle_root", "N/A")
 
-        report_content = (
+        prompt = f"Generate comprehensive incident report ({report_type}) for incident ID {incident_id}, title {title}, date {date_str}, location {location_str}, merkle root {merkle_root}."
+        system = "You are Sahara Incident Reporting Agent. Create formal, factual incident reports from verified facts."
+        llm_result = self._call_real_llm_provider(prompt, system)
+
+        report_content = llm_result or (
             f"SAHARA INCIDENT COMPREHENSIVE REPORT ({report_type})\n"
             f"===================================================\n"
             f"Report Reference ID: {str(uuid.uuid4())}\n"
