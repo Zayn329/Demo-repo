@@ -14,9 +14,14 @@ from app.models.schemas import (
     RequestOtpRequest, RequestOtpResponse, VerifyOtpRequest, VerifyOtpResponse,
     RefreshTokenRequest, CircleUpdateRequest, CircleMember, IncidentAlertRequest,
     IncidentAlertResponse, AcknowledgementRequest, BatchSyncRequest, BatchSyncResponse,
-    AnchorRequest, AnchorResponse, LegalDraftRequest, LegalDraftResponse, ErrorEnvelope, ErrorDetail
+    AnchorRequest, AnchorResponse, LegalDraftRequest, LegalDraftResponse, ErrorEnvelope, ErrorDetail,
+    AISummaryRequest, AISummaryResponse,
+    AITimelineRequest, AITimelineResponse,
+    AIQaRequest, AIQaResponse,
+    AIReportRequest, AIReportResponse
 )
 from app.agents.legal_agent import LegalAgent, MANDATORY_LEGAL_DISCLAIMER
+from app.agents.ai_agent import AIAgent, AIProviderUnavailableError
 
 # Initialize database tables
 try:
@@ -76,11 +81,19 @@ app = FastAPI(
 )
 
 legal_agent = LegalAgent()
+ai_agent = AIAgent()
+
+def validate_no_raw_evidence(data_dict: dict):
+    s = str(data_dict).lower()
+    if "raw_audio" in s or "audio_bytes" in s or "private_key" in s:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorEnvelope(error=ErrorDetail(code="PROHIBITED_SENSITIVE_DATA", message="Raw evidence bytes or private keys are prohibited in AI processing requests")).model_dump()
+        )
 
 @app.post("/api/v1/auth/request-otp", response_model=RequestOtpResponse)
 def request_otp(req: RequestOtpRequest, db: Session = Depends(get_db)):
     now = int(time.time())
-    # Persistent DB Rate limiting check: max 5 requests per phone in 10 minutes
     recent_requests = db.query(DBOtpRequest).filter(
         DBOtpRequest.phone_number == req.phone_number,
         DBOtpRequest.created_at > (now - 600)
@@ -92,7 +105,6 @@ def request_otp(req: RequestOtpRequest, db: Session = Depends(get_db)):
         )
 
     req_id = str(uuid.uuid4())
-    # Deterministic or random 6-digit OTP code (default 123456 or random)
     otp_code = str(random.randint(100000, 999999))
     expires_at = now + 300
 
@@ -126,7 +138,6 @@ def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
             detail=ErrorEnvelope(error=ErrorDetail(code="OTP_MAX_ATTEMPTS", message="Maximum verification attempts exceeded")).model_dump()
         )
 
-    # Verify matching OTP code
     if req.otp_code != otp_db.otp_code:
         otp_db.attempts += 1
         db.commit()
@@ -135,7 +146,6 @@ def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
             detail=ErrorEnvelope(error=ErrorDetail(code="INVALID_OTP_CODE", message="Incorrect OTP code")).model_dump()
         )
 
-    # Fetch or create user
     existing_user = db.query(DBUser).filter(DBUser.phone_number == otp_db.phone_number).first()
     if not existing_user:
         user_id = str(uuid.uuid4())
@@ -232,7 +242,6 @@ def batch_sync(req: BatchSyncRequest, current_user: DBUser = Depends(get_current
     accepted_ids = []
     rejected = []
     for event in req.events:
-        # Security check: verify raw audio is not uploaded
         payload_str = str(event.payload).lower()
         if "raw_audio" in payload_str or "audio_bytes" in payload_str:
             rejected.append({"event_id": event.event_id, "reason": "Raw evidence upload prohibited"})
@@ -256,7 +265,6 @@ def create_anchor(req: AnchorRequest, current_user: DBUser = Depends(get_current
     anchor_id = str(uuid.uuid4())
     polygon_rpc = os.getenv("POLYGON_RPC_URL")
 
-    # Compute deterministic transaction receipt hash from Merkle root and signature
     payload_hash = hashlib.sha256(f"{req.merkle_root}:{req.device_signature}:{req.timestamp}".encode()).hexdigest()
     tx_hash = f"0x{payload_hash}"
     created_at = int(time.time())
@@ -296,12 +304,97 @@ def get_anchor(anchor_id: str, current_user: DBUser = Depends(get_current_user),
         created_at=db_anchor.created_at
     )
 
+# --- AI & LEGAL ASSISTANCE ENDPOINTS ---
+
 @app.post("/api/v1/legal/drafts", response_model=LegalDraftResponse)
 def generate_legal_draft(req: LegalDraftRequest, current_user: DBUser = Depends(get_current_user)):
+    validate_no_raw_evidence(req.model_dump())
     try:
         return legal_agent.generate_draft(req)
+    except AIProviderUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorEnvelope(error=ErrorDetail(code="AI_PROVIDER_UNAVAILABLE", message=str(e))).model_dump()
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=ErrorEnvelope(error=ErrorDetail(code="UNAUTHORIZED_LEGAL_REQUEST", message=str(e))).model_dump()
+            detail=ErrorEnvelope(error=ErrorDetail(code="USER_AUTHORIZATION_REQUIRED", message=str(e))).model_dump()
+        )
+
+@app.post("/api/v1/ai/summaries", response_model=AISummaryResponse)
+def generate_ai_summary(req: AISummaryRequest, current_user: DBUser = Depends(get_current_user)):
+    validate_no_raw_evidence(req.model_dump())
+    try:
+        return ai_agent.generate_summary(req)
+    except AIProviderUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorEnvelope(error=ErrorDetail(code="AI_PROVIDER_UNAVAILABLE", message=str(e))).model_dump()
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorEnvelope(error=ErrorDetail(code="USER_AUTHORIZATION_REQUIRED", message=str(e))).model_dump()
+        )
+
+@app.post("/api/v1/ai/timelines", response_model=AITimelineResponse)
+def explain_ai_timeline(req: AITimelineRequest, current_user: DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    validate_no_raw_evidence(req.model_dump())
+    # If client passed empty events list, attempt trace from persistent stored DBSyncEvent records
+    if not req.events and req.incident_id:
+        stored_events = db.query(DBSyncEvent).filter(DBSyncEvent.incident_id == req.incident_id).all()
+        if stored_events:
+            from app.models.schemas import TimelineEventInput
+            req.events = [
+                TimelineEventInput(
+                    event_id=e.event_id,
+                    event_type=e.event_type,
+                    timestamp=e.occurred_at,
+                    payload=e.payload or {}
+                ) for e in stored_events
+            ]
+    try:
+        return ai_agent.explain_timeline(req)
+    except AIProviderUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorEnvelope(error=ErrorDetail(code="AI_PROVIDER_UNAVAILABLE", message=str(e))).model_dump()
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorEnvelope(error=ErrorDetail(code="USER_AUTHORIZATION_REQUIRED", message=str(e))).model_dump()
+        )
+
+@app.post("/api/v1/ai/qa", response_model=AIQaResponse)
+def answer_ai_question(req: AIQaRequest, current_user: DBUser = Depends(get_current_user)):
+    validate_no_raw_evidence(req.model_dump())
+    try:
+        return ai_agent.answer_question(req)
+    except AIProviderUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorEnvelope(error=ErrorDetail(code="AI_PROVIDER_UNAVAILABLE", message=str(e))).model_dump()
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorEnvelope(error=ErrorDetail(code="USER_AUTHORIZATION_REQUIRED", message=str(e))).model_dump()
+        )
+
+@app.post("/api/v1/ai/reports", response_model=AIReportResponse)
+def generate_ai_report(req: AIReportRequest, current_user: DBUser = Depends(get_current_user)):
+    validate_no_raw_evidence(req.model_dump())
+    try:
+        return ai_agent.generate_report(req)
+    except AIProviderUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorEnvelope(error=ErrorDetail(code="AI_PROVIDER_UNAVAILABLE", message=str(e))).model_dump()
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorEnvelope(error=ErrorDetail(code="USER_AUTHORIZATION_REQUIRED", message=str(e))).model_dump()
         )
