@@ -3,6 +3,7 @@ package org.sahara.features.incident.statemachine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import org.sahara.core.domain.models.AuditEvent
 import org.sahara.core.domain.models.AuditResult
 import org.sahara.core.domain.models.Incident
@@ -17,12 +18,29 @@ class IncidentStateMachine(
 ) {
 
     var onIncidentActivated: (suspend (Incident) -> Unit)? = null
+    var onStateChanged: ((IncidentState) -> Unit)? = null
 
     private val _currentIncident = MutableStateFlow<Incident?>(null)
     val currentIncident: StateFlow<Incident?> = _currentIncident.asStateFlow()
 
     private val _currentState = MutableStateFlow(IncidentState.IDLE)
     val currentState: StateFlow<IncidentState> = _currentState.asStateFlow()
+
+    suspend fun recoverActiveIncident(): Incident? {
+        val allIncidents = incidentRepository.getAllIncidents().first()
+        val unclosed = allIncidents.firstOrNull {
+            it.state == IncidentState.ACTIVE_INCIDENT ||
+            it.state == IncidentState.PENDING_CONFIRMATION ||
+            it.state == IncidentState.CANDIDATE_INCIDENT ||
+            it.state == IncidentState.SUSPICIOUS_SIGNAL
+        }
+        if (unclosed != null) {
+            _currentIncident.value = unclosed
+            updateState(unclosed.state, "RECOVERED_ACTIVE_INCIDENT", unclosed.incidentId)
+            return unclosed
+        }
+        return null
+    }
 
     suspend fun startMonitoring() {
         if (_currentState.value == IncidentState.IDLE) {
@@ -122,6 +140,7 @@ class IncidentStateMachine(
 
     private suspend fun updateState(newState: IncidentState, action: String, incidentId: UUID? = null) {
         _currentState.value = newState
+        onStateChanged?.invoke(newState)
         _currentIncident.value?.let {
             if (it.state != newState) {
                 val updated = it.copy(state = newState)

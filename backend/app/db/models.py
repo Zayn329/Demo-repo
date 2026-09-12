@@ -12,6 +12,7 @@ class DBCircleMember(Base):
     __tablename__ = "circle_members"
 
     contact_id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, index=True, nullable=False, default="default_user")
     display_name = Column(String, nullable=False)
     type = Column(String, nullable=False)
     phone_number = Column(String, nullable=True)
