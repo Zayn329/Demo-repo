@@ -67,28 +67,111 @@ class ScreamDetector(
     val modelVersion: String
         get() = tfliteClassifier?.modelVersion ?: "Hybrid-DSP-Heuristic-Fallback-v1.0"
 
+    // Temporal smoothing & hysteresis properties
+    var smoothedScore: Float = 0f
+        private set
+
+    var isInScreamState: Boolean = false
+        private set
+
+    var consecutivePositiveFrames: Int = 0
+        private set
+
+    var modeStatus: String = "DEGRADED_DSP_FALLBACK"
+        private set
+
+    // Configurable thresholds for hysteresis & debounce
+    var enterThreshold: Float = config.screamConfidenceThreshold
+    var exitThreshold: Float = (config.screamConfidenceThreshold * 0.5f).coerceAtLeast(0.12f)
+    var emaAlpha: Float = 0.35f
+    var requiredConsecutiveFrames: Int = 2
+    var cooldownMs: Long = 1500L
+
+    private var lastTriggerTimestamp: Long = 0L
+
     fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000): Float {
+        val currentTime = System.currentTimeMillis()
         val dspConfidence = analyzeHybridAcousticFeatures(audioBuffer, sampleRate)
 
-        val tfliteConfidence = tfliteClassifier?.classifyAudioFrame(audioBuffer, sampleRate) ?: -1f
+        val detailedResult = tfliteClassifier?.classifyAudioFrameDetailed(audioBuffer, sampleRate)
 
-        // If TFLite model is active and loaded, fuse TFLite classifier output with DSP features
-        val finalConfidence = if (tfliteConfidence >= 0f) {
-            (dspConfidence * 0.4f + tfliteConfidence * 0.6f)
+        val rawConfidence: Float
+        val activeLabel: String
+
+        if (detailedResult != null && detailedResult.isSuccess) {
+            modeStatus = "NORMAL_ML_YAMNET"
+
+            // Acoustic sanity check: if audio is near-silent, prevent model noise spikes
+            val sanitizedModelScore = if (dspConfidence < 0.05f) {
+                (detailedResult.maxScreamScore * 0.2f).coerceAtMost(0.10f)
+            } else {
+                detailedResult.maxScreamScore
+            }
+
+            rawConfidence = (dspConfidence * 0.3f + sanitizedModelScore * 0.7f).coerceAtMost(1.0f)
+            activeLabel = if (detailedResult.maxScreamScore >= 0.20f) "yamnet_scream (${detailedResult.winningLabel})" else "yamnet_audio"
+        } else if (detailedResult != null && detailedResult.errorMessage?.contains("Insufficient") == true) {
+            modeStatus = "BUFFERING"
+            rawConfidence = dspConfidence
+            activeLabel = "buffering_dsp_scream"
         } else {
-            dspConfidence // Graceful degradation to DSP acoustic feature pipeline
+            modeStatus = "DEGRADED_DSP_FALLBACK"
+            rawConfidence = dspConfidence
+            activeLabel = "dsp_scream_high_pitch"
         }
 
-        if (finalConfidence >= config.screamConfidenceThreshold) {
-            _detectionFlow.tryEmit(
-                SignalResult(
-                    detectorType = DetectorType.SCREAM,
-                    confidence = finalConfidence,
-                    label = if (tfliteConfidence >= 0f) "tflite_yamnet_scream" else "dsp_scream_high_pitch"
-                )
-            )
+        // Apply exponential moving average (EMA) temporal smoothing
+        smoothedScore = emaAlpha * rawConfidence + (1f - emaAlpha) * smoothedScore
+
+        // Hysteresis & debounce state evaluation
+        val isCooldownActive = (currentTime - lastTriggerTimestamp) < cooldownMs
+
+        if (!isInScreamState) {
+            if (smoothedScore >= enterThreshold && !isCooldownActive) {
+                consecutivePositiveFrames++
+                if (consecutivePositiveFrames >= requiredConsecutiveFrames) {
+                    isInScreamState = true
+                    lastTriggerTimestamp = currentTime
+                    _detectionFlow.tryEmit(
+                        SignalResult(
+                            detectorType = DetectorType.SCREAM,
+                            confidence = smoothedScore,
+                            label = activeLabel,
+                            timestamp = currentTime
+                        )
+                    )
+                }
+            } else {
+                consecutivePositiveFrames = 0
+            }
+        } else {
+            if (smoothedScore < exitThreshold) {
+                isInScreamState = false
+                consecutivePositiveFrames = 0
+            } else {
+                // Re-emit sustained scream signal if score remains above entry threshold
+                if (smoothedScore >= enterThreshold && (currentTime - lastTriggerTimestamp) >= 1000L) {
+                    lastTriggerTimestamp = currentTime
+                    _detectionFlow.tryEmit(
+                        SignalResult(
+                            detectorType = DetectorType.SCREAM,
+                            confidence = smoothedScore,
+                            label = activeLabel,
+                            timestamp = currentTime
+                        )
+                    )
+                }
+            }
         }
-        return finalConfidence
+
+        return smoothedScore
+    }
+
+    fun resetState() {
+        smoothedScore = 0f
+        isInScreamState = false
+        consecutivePositiveFrames = 0
+        lastTriggerTimestamp = 0L
     }
 
     internal fun analyzeHybridAcousticFeatures(audioBuffer: ShortArray, sampleRate: Int): Float {

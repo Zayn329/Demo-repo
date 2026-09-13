@@ -63,6 +63,7 @@ class SafetyForegroundService : Service(), SensorEventListener {
     private var audioRecord: AudioRecord? = null
     private var isRecordingAudio = false
     private var audioRecordingThread: Thread? = null
+    @Volatile private var latestAudioBuffer: ShortArray? = null
 
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
@@ -78,6 +79,15 @@ class SafetyForegroundService : Service(), SensorEventListener {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+
+        // Initialize TFLite Speech Commands Classifier from application assets
+        try {
+            val speechClassifier = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier(applicationContext)
+            keywordDetector.tfliteClassifier = speechClassifier
+            android.util.Log.d("SaharaDetection", "TFLite Speech Commands Classifier initialized. Loaded=${speechClassifier.isModelLoaded}, Version=${speechClassifier.modelVersion}")
+        } catch (e: Throwable) {
+            android.util.Log.w("SaharaDetection", "Failed to load TFLite Speech Commands Classifier: ${e.message}")
+        }
 
         // Initialize TFLite Scream Classifier from application assets
         try {
@@ -100,16 +110,19 @@ class SafetyForegroundService : Service(), SensorEventListener {
         serviceScope.launch {
             keywordDetector.detectionFlow.collect { signal ->
                 fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal, latestAudioBuffer)
             }
         }
         serviceScope.launch {
             screamDetector.detectionFlow.collect { signal ->
                 fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal, latestAudioBuffer)
             }
         }
         serviceScope.launch {
             motionDetector.detectionFlow.collect { signal ->
                 fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal)
             }
         }
 
@@ -197,11 +210,12 @@ class SafetyForegroundService : Service(), SensorEventListener {
                             preRollBuffer.offerChunk(chunk)
                             evidenceCaptureEngine?.preRollBuffer?.offerChunk(chunk)
 
+                            latestAudioBuffer = buffer.clone()
                             val kwConf = keywordDetector.processAudioChunk(buffer, sampleRate)
                             val screamConf = screamDetector.processAudioChunk(buffer, sampleRate)
 
                             if (chunkIndex % 50 == 0) { // Log diagnostic summary every ~5 seconds
-                                android.util.Log.d("SaharaDetection", "Audio chunk #$chunkIndex processed. kW_conf=%.2f, scream_conf=%.2f".format(kwConf, screamConf))
+                                android.util.Log.d("SaharaDetection", "Audio chunk #$chunkIndex processed. kW_conf=%.2f, scream_conf=%.2f (mode=${screamDetector.modeStatus})".format(kwConf, screamConf))
                             }
 
                             // If active incident, save real encrypted chunk
@@ -317,6 +331,11 @@ class SafetyForegroundService : Service(), SensorEventListener {
             audioRecord?.release()
         } catch (e: Throwable) {}
         audioRecord = null
+
+        try {
+            screamDetector.tfliteClassifier?.close()
+            keywordDetector.tfliteClassifier?.close()
+        } catch (_: Throwable) {}
 
         sensorManager?.unregisterListener(this)
     }
