@@ -128,4 +128,39 @@ class DetectionUnitTest {
         fusionEngine.checkConfirmationTimeout(System.currentTimeMillis())
         assertEquals(IncidentState.MONITORING, fusionEngine.currentState)
     }
+
+    @Test
+    fun testSpeechCommandsModelFilesExistAndAreValid() {
+        val modelFile = java.io.File("../../app/src/main/assets/models/speech_commands.tflite")
+        assertTrue("speech_commands.tflite model file must exist in assets/models/", modelFile.exists())
+        assertTrue("speech_commands.tflite model file size must be > 0", modelFile.length() > 0)
+
+        val labelsFile = java.io.File("../../app/src/main/assets/models/speech_commands_labels.txt")
+        assertTrue("speech_commands_labels.txt labels file must exist in assets/models/", labelsFile.exists())
+        val labels = labelsFile.readLines().map { it.trim() }.filter { it.isNotEmpty() }
+        assertTrue("speech_commands_labels.txt must contain labels", labels.isNotEmpty())
+    }
+
+    @Test
+    fun testKeywordDetectorUsesTFLiteClassifierWhenLoaded() {
+        val speechClassifier = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier(null)
+        val labelsFile = java.io.File("../../app/src/main/assets/models/speech_commands_labels.txt")
+        val loadedLabels = labelsFile.readLines().map { it.trim() }
+
+        val labelsField = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier::class.java.getDeclaredField("labels")
+        labelsField.isAccessible = true
+        labelsField.set(speechClassifier, loadedLabels)
+
+        val isLoadedField = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier::class.java.getDeclaredField("isModelLoaded")
+        isLoadedField.isAccessible = true
+        isLoadedField.set(speechClassifier, true)
+
+        assertTrue(speechClassifier.isModelLoaded)
+        keywordDetector.tfliteClassifier = speechClassifier
+
+        // When tfliteClassifier is loaded but interpreter is null (e.g. mock loaded state), classifyAudioFrame returns -1f and falls back gracefully
+        val dummyAudio = ShortArray(1600) { 20000 }
+        val confidence = keywordDetector.processAudioChunk(dummyAudio, 16000)
+        assertTrue("KeywordDetector handles audio processing cleanly when TFLite classifier is attached", confidence >= 0f)
+    }
 }

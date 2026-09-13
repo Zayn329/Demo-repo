@@ -79,6 +79,15 @@ class SafetyForegroundService : Service(), SensorEventListener {
         super.onCreate()
         createNotificationChannel()
 
+        // Initialize TFLite Speech Commands Classifier from application assets
+        try {
+            val speechClassifier = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier(applicationContext)
+            keywordDetector.tfliteClassifier = speechClassifier
+            android.util.Log.d("SaharaDetection", "TFLite Speech Commands Classifier initialized. Loaded=${speechClassifier.isModelLoaded}, Version=${speechClassifier.modelVersion}")
+        } catch (e: Throwable) {
+            android.util.Log.w("SaharaDetection", "Failed to load TFLite Speech Commands Classifier: ${e.message}")
+        }
+
         // Initialize TFLite Scream Classifier from application assets
         try {
             val classifier = org.sahara.services.detection.tflite.TFLiteScreamClassifier(applicationContext)
