@@ -215,7 +215,7 @@ class SafetyForegroundService : Service(), SensorEventListener {
                             val screamConf = screamDetector.processAudioChunk(buffer, sampleRate)
 
                             if (chunkIndex % 50 == 0) { // Log diagnostic summary every ~5 seconds
-                                android.util.Log.d("SaharaDetection", "Audio chunk #$chunkIndex processed. kW_conf=%.2f, scream_conf=%.2f".format(kwConf, screamConf))
+                                android.util.Log.d("SaharaDetection", "Audio chunk #$chunkIndex processed. kW_conf=%.2f, scream_conf=%.2f (mode=${screamDetector.modeStatus})".format(kwConf, screamConf))
                             }
 
                             // If active incident, save real encrypted chunk
@@ -331,6 +331,11 @@ class SafetyForegroundService : Service(), SensorEventListener {
             audioRecord?.release()
         } catch (e: Throwable) {}
         audioRecord = null
+
+        try {
+            screamDetector.tfliteClassifier?.close()
+            keywordDetector.tfliteClassifier?.close()
+        } catch (_: Throwable) {}
 
         sensorManager?.unregisterListener(this)
     }
