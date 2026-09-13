@@ -168,10 +168,18 @@ def verify_otp(req: VerifyOtpRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/auth/refresh", response_model=VerifyOtpResponse)
 def refresh_token(req: RefreshTokenRequest):
-    user_id = str(uuid.uuid4())
+    try:
+        user_id = verify_signed_token(req.refresh_token)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ErrorEnvelope(error=ErrorDetail(code="INVALID_REFRESH_TOKEN", message=str(e))).model_dump()
+        )
+    access_token = generate_signed_token(user_id, "access")
+    new_refresh_token = generate_signed_token(user_id, "refresh")
     return VerifyOtpResponse(
-        access_token=f"access_token_{user_id}",
-        refresh_token=req.refresh_token,
+        access_token=access_token,
+        refresh_token=new_refresh_token,
         user_id=user_id
     )
 
@@ -181,7 +189,7 @@ def logout():
 
 @app.get("/api/v1/notify/circle", response_model=list[CircleMember])
 def get_circle(current_user: DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    members = db.query(DBCircleMember).all()
+    members = db.query(DBCircleMember).filter(DBCircleMember.user_id == current_user.id).all()
     return [
         CircleMember(
             contact_id=m.contact_id,
@@ -201,10 +209,11 @@ def update_circle(req: CircleUpdateRequest, current_user: DBUser = Depends(get_c
             status_code=400,
             detail=ErrorEnvelope(error=ErrorDetail(code="CIRCLE_LIMIT_EXCEEDED", message="Circle cannot exceed 5 members")).model_dump()
         )
-    db.query(DBCircleMember).delete()
+    db.query(DBCircleMember).filter(DBCircleMember.user_id == current_user.id).delete()
     for m in req.members:
         db_m = DBCircleMember(
             contact_id=m.contact_id,
+            user_id=current_user.id,
             display_name=m.display_name,
             type=m.type,
             phone_number=m.phone_number,
@@ -214,7 +223,7 @@ def update_circle(req: CircleUpdateRequest, current_user: DBUser = Depends(get_c
         )
         db.add(db_m)
     db.commit()
-    members = db.query(DBCircleMember).all()
+    members = db.query(DBCircleMember).filter(DBCircleMember.user_id == current_user.id).all()
     return [
         CircleMember(
             contact_id=m.contact_id,
@@ -230,7 +239,7 @@ def update_circle(req: CircleUpdateRequest, current_user: DBUser = Depends(get_c
 @app.post("/api/v1/notifications/incident-alert", response_model=IncidentAlertResponse)
 def send_incident_alert(req: IncidentAlertRequest, current_user: DBUser = Depends(get_current_user), db: Session = Depends(get_db)):
     alert_id = str(uuid.uuid4())
-    count = db.query(DBCircleMember).count()
+    count = db.query(DBCircleMember).filter(DBCircleMember.user_id == current_user.id).count()
     return IncidentAlertResponse(alert_id=alert_id, dispatched_count=count, status="ACCEPTED")
 
 @app.post("/api/v1/notifications/acknowledgements", status_code=200)

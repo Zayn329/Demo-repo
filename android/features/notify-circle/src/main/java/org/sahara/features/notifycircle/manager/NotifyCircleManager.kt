@@ -105,10 +105,22 @@ class NotifyCircleManager(
                 referenceCode = referenceCode
             )
 
+            val meshPacket = org.sahara.services.mesh.models.MeshPacket(
+                packetId = "mesh_${UUID.randomUUID().toString().take(8)}",
+                incidentId = incidentId.toString(),
+                packetType = org.sahara.services.mesh.models.MeshPacketType.DISTRESS_ALERT,
+                createdAt = System.currentTimeMillis(),
+                hopCount = 0,
+                maxHops = 12,
+                senderIntegrityMetadata = "Android/SaharaMeshNode",
+                payloadHash = evidenceHash,
+                payloadText = payload.formatSmsMessage()
+            )
+
             val escalationResult = fallbackManager.executeEscalation(
                 alertPayload = payload,
                 contacts = listOf(contact),
-                meshPacket = null
+                meshPacket = meshPacket
             )
 
             val smsStatus = escalationResult[contact.displayName]

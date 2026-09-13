@@ -84,6 +84,13 @@ class SignalFusionEngine(val config: DetectionConfig) {
         activeSignals.removeIf { currentTime - it.timestamp > windowMs }
     }
 
+    fun updateCurrentState(state: IncidentState) {
+        this.currentState = state
+        if (state == IncidentState.MONITORING || state == IncidentState.CANCELLED || state == IncidentState.SEALED || state == IncidentState.IDLE) {
+            activeSignals.clear()
+        }
+    }
+
     fun resetState() {
         currentState = IncidentState.MONITORING
         activeSignals.clear()

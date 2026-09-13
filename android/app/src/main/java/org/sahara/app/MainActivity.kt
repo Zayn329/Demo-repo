@@ -123,6 +123,10 @@ class MainActivity : ComponentActivity() {
         stateMachine = IncidentStateMachine(incidentRepository, auditRepository)
         panicController = PanicController(stateMachine)
 
+        stateMachine.onStateChanged = { newState ->
+            foregroundService?.fusionEngine?.updateCurrentState(newState)
+        }
+
         keyManager = KeyStorageManagerImpl()
         val gcmStorage = AesGcmFileStorage()
         preRollBuffer = BoundedAudioPreRollBuffer()
@@ -183,6 +187,16 @@ class MainActivity : ComponentActivity() {
         var elapsedIncidentSeconds by remember { mutableStateOf(18) }
         var recordedIncidentsCount by remember { mutableStateOf(0) }
         val scope = rememberCoroutineScope()
+
+        LaunchedEffect(Unit) {
+            try {
+                val recovered = stateMachine.recoverActiveIncident()
+                if (recovered != null && recovered.state == IncidentState.ACTIVE_INCIDENT) {
+                    activeIncidentState = IncidentState.ACTIVE_INCIDENT
+                    currentScreen = Screen.ACTIVE_INCIDENT
+                }
+            } catch (_: Exception) {}
+        }
 
         LaunchedEffect(currentScreen) {
             try {

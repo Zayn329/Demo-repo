@@ -76,6 +76,22 @@ object EvidenceVerifier {
             return false // Active or unsealed incidents must not be verified as sealed packages
         }
 
+        // Verify physical files on disk against expected SHA-256 hashes
+        for (entry in evidenceEntries) {
+            val file = java.io.File(entry.encryptedPath)
+            if (!file.exists() || !file.isFile) {
+                return false // Missing evidence file on disk
+            }
+            val physicalHash = try {
+                MerkleTree.computeSha256(file.readBytes())
+            } catch (e: Throwable) {
+                return false
+            }
+            if (physicalHash != entry.sha256) {
+                return false // Tampered or corrupted file on disk
+            }
+        }
+
         val sortedHashes = evidenceEntries.sortedBy { it.chunkIndex ?: 0 }.map { it.sha256 }
         val recomputedMerkleRoot = try {
             MerkleTree.buildMerkleRoot(sortedHashes)
