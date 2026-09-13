@@ -163,4 +163,29 @@ class DetectionUnitTest {
         val confidence = keywordDetector.processAudioChunk(dummyAudio, 16000)
         assertTrue("KeywordDetector handles audio processing cleanly when TFLite classifier is attached", confidence >= 0f)
     }
+
+    @Test
+    fun testDetectionLogManagerStoreAndClear() {
+        val logManager = org.sahara.services.detection.log.DetectionLogManager
+        logManager.clearLogs()
+        assertEquals(0, logManager.events.value.size)
+
+        val signal = SignalResult(
+            detectorType = DetectorType.KEYWORD,
+            confidence = 0.88f,
+            label = "help"
+        )
+        val samplePcm = ShortArray(100) { 500 }
+        logManager.logEvent(signal, samplePcm)
+
+        val logs = logManager.events.value
+        assertEquals(1, logs.size)
+        assertEquals("help", logs[0].signal.label)
+        assertEquals(DetectorType.KEYWORD, logs[0].signal.detectorType)
+        assertEquals(0.88f, logs[0].signal.confidence, 0.001f)
+        assertTrue("Audio payload stored for audio event", logs[0].audioData != null)
+
+        logManager.clearLogs()
+        assertEquals(0, logManager.events.value.size)
+    }
 }

@@ -583,7 +583,8 @@ fun HomeDashboardScreen(
     onOpenDirectory: () -> Unit,
     onOpenVerifier: () -> Unit,
     onOpenLegalDraft: () -> Unit,
-    onOpenAnchoring: () -> Unit
+    onOpenAnchoring: () -> Unit,
+    onOpenDetectionLog: () -> Unit = {}
 ) {
     var selectedNavTab by remember { mutableStateOf("Home") }
 
@@ -758,6 +759,13 @@ fun HomeDashboardScreen(
                 MiniToolButton("AI FIR Drafter", onClick = onOpenLegalDraft, modifier = Modifier.weight(1f))
                 MiniToolButton("Anchoring", onClick = onOpenAnchoring, modifier = Modifier.weight(1f))
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            SaharaSecondaryButton(
+                text = "📊 View Detection Log",
+                onClick = onOpenDetectionLog
+            )
         }
 
         // Bottom Navigation Bar

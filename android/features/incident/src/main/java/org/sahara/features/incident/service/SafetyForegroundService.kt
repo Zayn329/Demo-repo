@@ -63,6 +63,7 @@ class SafetyForegroundService : Service(), SensorEventListener {
     private var audioRecord: AudioRecord? = null
     private var isRecordingAudio = false
     private var audioRecordingThread: Thread? = null
+    @Volatile private var latestAudioBuffer: ShortArray? = null
 
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
@@ -109,16 +110,19 @@ class SafetyForegroundService : Service(), SensorEventListener {
         serviceScope.launch {
             keywordDetector.detectionFlow.collect { signal ->
                 fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal, latestAudioBuffer)
             }
         }
         serviceScope.launch {
             screamDetector.detectionFlow.collect { signal ->
                 fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal, latestAudioBuffer)
             }
         }
         serviceScope.launch {
             motionDetector.detectionFlow.collect { signal ->
                 fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal)
             }
         }
 
@@ -206,6 +210,7 @@ class SafetyForegroundService : Service(), SensorEventListener {
                             preRollBuffer.offerChunk(chunk)
                             evidenceCaptureEngine?.preRollBuffer?.offerChunk(chunk)
 
+                            latestAudioBuffer = buffer.clone()
                             val kwConf = keywordDetector.processAudioChunk(buffer, sampleRate)
                             val screamConf = screamDetector.processAudioChunk(buffer, sampleRate)
 

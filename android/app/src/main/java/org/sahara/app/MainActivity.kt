@@ -26,6 +26,7 @@ import org.sahara.app.export.ExportPackage
 import org.sahara.app.ui.ActiveIncidentScreen
 import org.sahara.app.ui.AnchoringScreen
 import org.sahara.app.ui.AuthScreen
+import org.sahara.app.ui.DetectionLogScreen
 import org.sahara.app.ui.ExportVerifierScreen
 import org.sahara.app.ui.HelpDirectoryScreen
 import org.sahara.app.ui.HomeDashboardScreen
@@ -77,7 +78,8 @@ enum class Screen {
     VERIFIER,
     AUTH,
     LEGAL_DRAFTING,
-    ANCHORING
+    ANCHORING,
+    DETECTION_LOG
 }
 
 class MainActivity : ComponentActivity() {
@@ -279,7 +281,13 @@ class MainActivity : ComponentActivity() {
                     onOpenDirectory = { currentScreen = Screen.HELP_DIRECTORY },
                     onOpenVerifier = { currentScreen = Screen.VERIFIER },
                     onOpenLegalDraft = { currentScreen = Screen.LEGAL_DRAFTING },
-                    onOpenAnchoring = { currentScreen = Screen.ANCHORING }
+                    onOpenAnchoring = { currentScreen = Screen.ANCHORING },
+                    onOpenDetectionLog = { currentScreen = Screen.DETECTION_LOG }
+                )
+            }
+            Screen.DETECTION_LOG -> {
+                DetectionLogScreen(
+                    onBack = { currentScreen = Screen.HOME }
                 )
             }
             Screen.SAFETY_WATCH -> {
