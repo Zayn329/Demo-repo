@@ -7,6 +7,20 @@ import org.sahara.core.domain.models.DetectorType
 import org.sahara.services.detection.models.DetectionConfig
 import org.sahara.services.detection.models.SignalResult
 
+enum class DspSanityStatus {
+    PASS,
+    TRANSIENT_REJECT,
+    SILENT_REJECT
+}
+
+data class DspAcousticFeatures(
+    val rms: Float,
+    val peakRatio: Float,
+    val crestFactor: Float,
+    val zcr: Float,
+    val status: DspSanityStatus
+)
+
 class KeywordDetector(
     private val config: DetectionConfig,
     var tfliteClassifier: org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier? = null
@@ -91,33 +105,47 @@ class ScreamDetector(
 
     fun processAudioChunk(audioBuffer: ShortArray, sampleRate: Int = 16000): Float {
         val currentTime = System.currentTimeMillis()
-        val dspConfidence = analyzeHybridAcousticFeatures(audioBuffer, sampleRate)
+        val dspFeatures = analyzeAcousticFeatures(audioBuffer, sampleRate)
 
         val detailedResult = tfliteClassifier?.classifyAudioFrameDetailed(audioBuffer, sampleRate)
 
         val rawConfidence: Float
+        val yamnetScore: Float
+        val dspStatusStr: String
         val activeLabel: String
 
-        if (detailedResult != null && detailedResult.isSuccess) {
+        val isYamnetHealthy = detailedResult != null && detailedResult.isSuccess
+
+        if (isYamnetHealthy) {
             modeStatus = "NORMAL_ML_YAMNET"
+            yamnetScore = detailedResult!!.maxScreamScore
+            dspStatusStr = dspFeatures.status.name
 
-            // Acoustic sanity check: if audio is near-silent, prevent model noise spikes
-            val sanitizedModelScore = if (dspConfidence < 0.05f) {
-                (detailedResult.maxScreamScore * 0.2f).coerceAtMost(0.10f)
-            } else {
-                detailedResult.maxScreamScore
+            // NORMAL_ML_YAMNET: YAMNet is authoritative. DSP is supporting sanity check.
+            rawConfidence = when (dspFeatures.status) {
+                DspSanityStatus.SILENT_REJECT -> yamnetScore.coerceAtMost(0.05f)
+                DspSanityStatus.TRANSIENT_REJECT -> yamnetScore.coerceAtMost(0.10f)
+                DspSanityStatus.PASS -> yamnetScore
             }
-
-            rawConfidence = (dspConfidence * 0.3f + sanitizedModelScore * 0.7f).coerceAtMost(1.0f)
-            activeLabel = if (detailedResult.maxScreamScore >= 0.20f) "yamnet_scream (${detailedResult.winningLabel})" else "yamnet_audio"
         } else if (detailedResult != null && detailedResult.errorMessage?.contains("Insufficient") == true) {
             modeStatus = "BUFFERING"
-            rawConfidence = dspConfidence
-            activeLabel = "buffering_dsp_scream"
+            yamnetScore = -1f
+            dspStatusStr = dspFeatures.status.name
+            rawConfidence = 0.0f
         } else {
             modeStatus = "DEGRADED_DSP_FALLBACK"
-            rawConfidence = dspConfidence
-            activeLabel = "dsp_scream_high_pitch"
+            yamnetScore = -1f
+            dspStatusStr = dspFeatures.status.name
+
+            // DEGRADED_DSP_FALLBACK mode: Conservative heuristic requiring sustained energy
+            rawConfidence = if (dspFeatures.status == DspSanityStatus.PASS &&
+                dspFeatures.rms >= 0.10f && dspFeatures.peakRatio >= 0.15f &&
+                dspFeatures.zcr in 0.05f..0.50f && dspFeatures.crestFactor in 1.2f..3.8f
+            ) {
+                (dspFeatures.rms * 1.8f).coerceAtMost(0.80f)
+            } else {
+                0.0f
+            }
         }
 
         // Apply exponential moving average (EMA) temporal smoothing
@@ -125,42 +153,65 @@ class ScreamDetector(
 
         // Hysteresis & debounce state evaluation
         val isCooldownActive = (currentTime - lastTriggerTimestamp) < cooldownMs
+        val effectiveReqFrames = if (modeStatus == "DEGRADED_DSP_FALLBACK") 4 else requiredConsecutiveFrames
+
+        val currentStateStr: String
 
         if (!isInScreamState) {
             if (smoothedScore >= enterThreshold && !isCooldownActive) {
                 consecutivePositiveFrames++
-                if (consecutivePositiveFrames >= requiredConsecutiveFrames) {
+                if (consecutivePositiveFrames >= effectiveReqFrames) {
                     isInScreamState = true
+                    currentStateStr = "TRIGGERED"
                     lastTriggerTimestamp = currentTime
-                    _detectionFlow.tryEmit(
-                        SignalResult(
-                            detectorType = DetectorType.SCREAM,
-                            confidence = smoothedScore,
-                            label = activeLabel,
-                            timestamp = currentTime
-                        )
-                    )
+                } else {
+                    currentStateStr = "CANDIDATE"
                 }
             } else {
                 consecutivePositiveFrames = 0
+                currentStateStr = "IDLE"
             }
         } else {
             if (smoothedScore < exitThreshold) {
                 isInScreamState = false
                 consecutivePositiveFrames = 0
+                currentStateStr = "IDLE"
             } else {
-                // Re-emit sustained scream signal if score remains above entry threshold
-                if (smoothedScore >= enterThreshold && (currentTime - lastTriggerTimestamp) >= 1000L) {
-                    lastTriggerTimestamp = currentTime
-                    _detectionFlow.tryEmit(
-                        SignalResult(
-                            detectorType = DetectorType.SCREAM,
-                            confidence = smoothedScore,
-                            label = activeLabel,
-                            timestamp = currentTime
-                        )
+                currentStateStr = "TRIGGERED"
+            }
+        }
+
+        // Formulate diagnostic string for in-app Detection Log UI
+        activeLabel = if (modeStatus == "NORMAL_ML_YAMNET") {
+            "YAMNet: %.2f | DSP: %s | Final: %.2f | Mode: %s | State: %s".format(
+                yamnetScore, dspStatusStr, smoothedScore, modeStatus, currentStateStr
+            )
+        } else if (modeStatus == "DEGRADED_DSP_FALLBACK") {
+            "DSP: %.2f | Source: DSP_FALLBACK | Mode: %s | State: %s".format(
+                rawConfidence, modeStatus, currentStateStr
+            )
+        } else {
+            "Mode: %s | State: %s".format(modeStatus, currentStateStr)
+        }
+
+        // Emit signal event for detection flow / detection log when relevant decision occurs
+        val isRelevantDecision = isInScreamState ||
+                currentStateStr == "CANDIDATE" ||
+                yamnetScore >= 0.12f ||
+                rawConfidence >= 0.12f ||
+                dspFeatures.status == DspSanityStatus.TRANSIENT_REJECT
+
+        if (isRelevantDecision) {
+            val isTriggeredEvent = isInScreamState && (currentTime - lastTriggerTimestamp < 1000L || consecutivePositiveFrames == effectiveReqFrames)
+            if (isTriggeredEvent || currentStateStr == "CANDIDATE" || dspFeatures.status == DspSanityStatus.TRANSIENT_REJECT || yamnetScore >= 0.15f) {
+                _detectionFlow.tryEmit(
+                    SignalResult(
+                        detectorType = DetectorType.SCREAM,
+                        confidence = smoothedScore,
+                        label = activeLabel,
+                        timestamp = currentTime
                     )
-                }
+                )
             }
         }
 
@@ -174,28 +225,59 @@ class ScreamDetector(
         lastTriggerTimestamp = 0L
     }
 
-    internal fun analyzeHybridAcousticFeatures(audioBuffer: ShortArray, sampleRate: Int): Float {
-        if (audioBuffer.isEmpty() || sampleRate <= 0) return 0f
-        var zeroCrossings = 0
+    fun analyzeAcousticFeatures(audioBuffer: ShortArray, sampleRate: Int = 16000): DspAcousticFeatures {
+        if (audioBuffer.isEmpty() || sampleRate <= 0) {
+            return DspAcousticFeatures(0f, 0f, 0f, 0f, DspSanityStatus.SILENT_REJECT)
+        }
+
+        var sumSquare = 0.0
         var maxAmplitude = 0
-        for (i in 0 until audioBuffer.size - 1) {
-            val current = audioBuffer[i].toInt()
-            val next = audioBuffer[i + 1].toInt()
-            if ((current >= 0 && next < 0) || (current < 0 && next >= 0)) {
-                zeroCrossings++
-            }
-            val absVal = Math.abs(current)
+        var zeroCrossings = 0
+
+        val size = audioBuffer.size
+        for (i in 0 until size) {
+            val sample = audioBuffer[i].toInt()
+            sumSquare += sample.toDouble() * sample.toDouble()
+            val absVal = Math.abs(sample)
             if (absVal > maxAmplitude) {
                 maxAmplitude = absVal
             }
+            if (i < size - 1) {
+                val next = audioBuffer[i + 1].toInt()
+                if ((sample >= 0 && next < 0) || (sample < 0 && next >= 0)) {
+                    zeroCrossings++
+                }
+            }
         }
-        val zcr = zeroCrossings.toFloat() / audioBuffer.size.toFloat()
-        val amplitudeRatio = maxAmplitude.toFloat() / 32768.0f
 
-        if (zcr in 0.05f..0.65f && amplitudeRatio >= 0.15f) {
-            return (amplitudeRatio * 2.0f).coerceAtMost(1.0f)
+        val rms = Math.sqrt(sumSquare / size).toFloat()
+        val normalizedRms = rms / 32768.0f
+        val peakRatio = maxAmplitude.toFloat() / 32768.0f
+        val crestFactor = if (normalizedRms > 0.0001f) peakRatio / normalizedRms else 0f
+        val zcr = zeroCrossings.toFloat() / (size - 1).coerceAtLeast(1).toFloat()
+
+        val status = when {
+            normalizedRms < 0.012f && peakRatio < 0.025f -> DspSanityStatus.SILENT_REJECT
+            crestFactor > 4.2f && peakRatio > 0.04f -> DspSanityStatus.TRANSIENT_REJECT
+            zcr > 0.62f && peakRatio < 0.30f -> DspSanityStatus.TRANSIENT_REJECT
+            else -> DspSanityStatus.PASS
         }
-        return (amplitudeRatio * 0.5f).coerceAtMost(0.29f)
+
+        return DspAcousticFeatures(
+            rms = normalizedRms,
+            peakRatio = peakRatio,
+            crestFactor = crestFactor,
+            zcr = zcr,
+            status = status
+        )
+    }
+
+    internal fun analyzeHybridAcousticFeatures(audioBuffer: ShortArray, sampleRate: Int): Float {
+        val features = analyzeAcousticFeatures(audioBuffer, sampleRate)
+        if (features.status == DspSanityStatus.PASS) {
+            return (features.peakRatio * 2.0f).coerceAtMost(1.0f)
+        }
+        return (features.peakRatio * 0.5f).coerceAtMost(0.29f)
     }
 }
 

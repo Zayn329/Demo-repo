@@ -18,7 +18,7 @@ data class ScreamInferenceResult(
     val errorMessage: String? = null
 )
 
-class TFLiteScreamClassifier(context: Context? = null) {
+open class TFLiteScreamClassifier(context: Context? = null) {
 
     companion object {
         private const val TAG = "TFLiteScreamClassifier"
@@ -28,22 +28,22 @@ class TFLiteScreamClassifier(context: Context? = null) {
     }
 
     var isModelLoaded: Boolean = false
-        private set
+        protected set
 
     var interpreter: Interpreter? = null
-        private set
+        protected set
 
     var labels: List<String> = emptyList()
-        private set
+        protected set
 
     var screamLabelIndices: List<Int> = listOf(6, 7, 9, 10, 11) // YAMNet AudioSet Audio indices for Scream, Bellow, Yell, Children shouting, Screaming
-        private set
+        protected set
 
     var requiredSampleCount: Int = DEFAULT_WINDOW_SAMPLES
-        private set
+        protected set
 
     var outputClassCount: Int = DEFAULT_CLASS_COUNT
-        private set
+        protected set
 
     val modelVersion: String = "YAMNet-TFLite-v1.0-AudioSet"
 
@@ -170,12 +170,12 @@ class TFLiteScreamClassifier(context: Context? = null) {
      * Executes inference on accumulated ring buffer samples.
      * Returns ScreamInferenceResult containing maxScreamScore and winning label.
      */
-    fun classifyAudioFrame(audioBuffer: ShortArray, sampleRate: Int = DEFAULT_SAMPLE_RATE): Float {
+    open fun classifyAudioFrame(audioBuffer: ShortArray, sampleRate: Int = DEFAULT_SAMPLE_RATE): Float {
         val result = classifyAudioFrameDetailed(audioBuffer, sampleRate)
         return if (result.isSuccess) result.maxScreamScore else -1f
     }
 
-    fun classifyAudioFrameDetailed(audioBuffer: ShortArray, sampleRate: Int = DEFAULT_SAMPLE_RATE): ScreamInferenceResult {
+    open fun classifyAudioFrameDetailed(audioBuffer: ShortArray, sampleRate: Int = DEFAULT_SAMPLE_RATE): ScreamInferenceResult {
         appendAudioSamples(audioBuffer)
 
         if (!isModelLoaded || interpreter == null) {
