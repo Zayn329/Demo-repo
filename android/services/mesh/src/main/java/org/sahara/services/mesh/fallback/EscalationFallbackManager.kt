@@ -59,8 +59,38 @@ sealed class SmsDeliveryStatus {
 
 class EscalationFallbackManager(
     private val meshRelay: NearbyConnectionsMeshRelay,
-    private val smsProvider: SmsProvider
+    private val smsProvider: SmsProvider,
+    private val isDebug: Boolean = false
 ) {
+
+    init {
+        if (!isDebug && smsProvider is DemoMockSmsProvider) {
+            throw IllegalStateException("DemoMockSmsProvider is strictly forbidden in production/release builds")
+        }
+    }
+
+    companion object {
+        fun createSmsProvider(isDebug: Boolean): SmsProvider {
+            return if (isDebug) {
+                DemoMockSmsProvider()
+            } else {
+                SystemSmsProvider()
+            }
+        }
+
+        fun create(
+            meshRelay: NearbyConnectionsMeshRelay,
+            isDebug: Boolean,
+            customSmsProvider: SmsProvider? = null
+        ): EscalationFallbackManager {
+            val provider = if (!isDebug) {
+                SystemSmsProvider()
+            } else {
+                customSmsProvider ?: DemoMockSmsProvider()
+            }
+            return EscalationFallbackManager(meshRelay, provider, isDebug = isDebug)
+        }
+    }
 
     fun executeEscalation(
         alertPayload: EmergencyAlertPayload,

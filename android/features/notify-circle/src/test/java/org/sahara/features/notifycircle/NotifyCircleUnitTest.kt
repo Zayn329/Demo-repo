@@ -36,7 +36,7 @@ class NotifyCircleUnitTest {
 
         val meshRelay = NearbyConnectionsMeshRelay()
         val mockSmsProvider = DemoMockSmsProvider()
-        fallbackManager = EscalationFallbackManager(meshRelay, mockSmsProvider)
+        fallbackManager = EscalationFallbackManager(meshRelay, mockSmsProvider, isDebug = true)
 
         circleManager = NotifyCircleManager(contactRepository, auditRepository, fallbackManager)
     }

@@ -14,7 +14,11 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class KeyStorageManagerImpl : KeyStorageManager {
+import java.io.File
+
+class KeyStorageManagerImpl(
+    private val fallbackDir: File = File(System.getProperty("java.io.tmpdir"), "sahara_fallback_keystore")
+) : KeyStorageManager {
 
     private val keyStore: KeyStore? = try {
         KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -48,7 +52,64 @@ class KeyStorageManagerImpl : KeyStorageManager {
                 // Keystore unavailable in standard JVM unit test environment
             }
         }
-        return inMemoryDataKeys.getOrPut(alias) { generatePerIncidentDataKey() }
+        val memoryKey = inMemoryDataKeys[alias]
+        if (memoryKey != null) {
+            return memoryKey
+        }
+        val persistedKey = loadFallbackKey(alias)
+        if (persistedKey != null) {
+            inMemoryDataKeys[alias] = persistedKey
+            return persistedKey
+        }
+        val newKey = generatePerIncidentDataKey()
+        saveFallbackKey(alias, newKey)
+        inMemoryDataKeys[alias] = newKey
+        return newKey
+    }
+
+    private fun saveFallbackKey(alias: String, key: SecretKey) {
+        try {
+            if (!fallbackDir.exists()) {
+                fallbackDir.mkdirs()
+            }
+            val file = File(fallbackDir, "${alias}.key")
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val kdfKey = deriveFallbackPassphraseKey()
+            cipher.init(Cipher.ENCRYPT_MODE, kdfKey)
+            val iv = cipher.iv
+            val encrypted = cipher.doFinal(key.encoded)
+            file.writeBytes(iv + encrypted)
+        } catch (e: Throwable) {
+            // Ignore fallback write errors
+        }
+    }
+
+    private fun loadFallbackKey(alias: String): SecretKey? {
+        try {
+            val file = File(fallbackDir, "${alias}.key")
+            if (!file.exists()) return null
+            val bytes = file.readBytes()
+            if (bytes.size <= 12) return null
+            val iv = bytes.copyOfRange(0, 12)
+            val encrypted = bytes.copyOfRange(12, bytes.size)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = GCMParameterSpec(128, iv)
+            val kdfKey = deriveFallbackPassphraseKey()
+            cipher.init(Cipher.DECRYPT_MODE, kdfKey, spec)
+            val rawKey = cipher.doFinal(encrypted)
+            return SecretKeySpec(rawKey, "AES")
+        } catch (e: Throwable) {
+            return null
+        }
+    }
+
+    private fun deriveFallbackPassphraseKey(): SecretKey {
+        val passphrase = "SAHARA_PERSISTENT_KEY_STORAGE_FALLBACK_SEED".toCharArray()
+        val salt = "sahara_fallback_salt_bytes".toByteArray()
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = javax.crypto.spec.PBEKeySpec(passphrase, salt, 10000, 256)
+        val tmp = factory.generateSecret(spec)
+        return SecretKeySpec(tmp.encoded, "AES")
     }
 
     override fun generatePerIncidentDataKey(): SecretKey {

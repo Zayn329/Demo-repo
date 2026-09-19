@@ -34,6 +34,25 @@ class CryptoUnitTest {
     }
 
     @Test
+    fun testPersistentFallbackKeyStorageAcrossInstances() {
+        val testDir = java.io.File(System.getProperty("java.io.tmpdir"), "test_fallback_keys_${System.currentTimeMillis()}")
+        testDir.mkdirs()
+        try {
+            val manager1 = KeyStorageManagerImpl(fallbackDir = testDir)
+            val masterKey1 = manager1.getOrCreateMasterKey("incident_master_alias")
+            assertNotNull(masterKey1)
+
+            val manager2 = KeyStorageManagerImpl(fallbackDir = testDir)
+            val masterKey2 = manager2.getOrCreateMasterKey("incident_master_alias")
+            assertNotNull(masterKey2)
+
+            assertEquals("Persisted master key bytes must match across process restarts", masterKey1.encoded.toList(), masterKey2.encoded.toList())
+        } finally {
+            testDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun testKeyWrappingUnwrapping() {
         val masterKey = keyManager.generatePerIncidentDataKey()
         val dataKey = keyManager.generatePerIncidentDataKey()

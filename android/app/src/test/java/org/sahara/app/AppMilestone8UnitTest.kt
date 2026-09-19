@@ -87,8 +87,17 @@ class AppMilestone8UnitTest {
             signature = "sig_bytes_hex"
         )
 
+        val entry = EvidenceEntry(
+            incidentId = incident.incidentId,
+            type = EvidenceType.AUDIO,
+            encryptedPath = "/path/to/encrypted/file.bin",
+            sha256 = "tampered_hash",
+            signatureReference = "sig_123",
+            chunkIndex = 0
+        )
+
         val pkg = EvidenceExporter.createExportPackage(
-            incident, manifest, emptyList(), tempDir, isIntegrityVerified = false
+            incident, manifest, listOf(entry), tempDir, isIntegrityVerified = false
         )
 
         assertFalse(pkg.isIntegrityVerified)

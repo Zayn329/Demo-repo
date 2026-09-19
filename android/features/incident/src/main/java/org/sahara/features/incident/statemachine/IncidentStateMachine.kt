@@ -3,6 +3,7 @@ package org.sahara.features.incident.statemachine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import org.sahara.core.domain.models.AuditEvent
 import org.sahara.core.domain.models.AuditResult
 import org.sahara.core.domain.models.Incident
@@ -16,11 +17,30 @@ class IncidentStateMachine(
     private val auditRepository: AuditRepository
 ) {
 
+    var onIncidentActivated: (suspend (Incident) -> Unit)? = null
+    var onStateChanged: ((IncidentState) -> Unit)? = null
+
     private val _currentIncident = MutableStateFlow<Incident?>(null)
     val currentIncident: StateFlow<Incident?> = _currentIncident.asStateFlow()
 
     private val _currentState = MutableStateFlow(IncidentState.IDLE)
     val currentState: StateFlow<IncidentState> = _currentState.asStateFlow()
+
+    suspend fun recoverActiveIncident(): Incident? {
+        val allIncidents = incidentRepository.getAllIncidents().first()
+        val unclosed = allIncidents.firstOrNull {
+            it.state == IncidentState.ACTIVE_INCIDENT ||
+            it.state == IncidentState.PENDING_CONFIRMATION ||
+            it.state == IncidentState.CANDIDATE_INCIDENT ||
+            it.state == IncidentState.SUSPICIOUS_SIGNAL
+        }
+        if (unclosed != null) {
+            _currentIncident.value = unclosed
+            updateState(unclosed.state, "RECOVERED_ACTIVE_INCIDENT", unclosed.incidentId)
+            return unclosed
+        }
+        return null
+    }
 
     suspend fun startMonitoring() {
         if (_currentState.value == IncidentState.IDLE) {
@@ -65,6 +85,7 @@ class IncidentStateMachine(
 
     suspend fun activateIncident(triggerSource: String) {
         val existing = _currentIncident.value
+        val activatedIncident: Incident
         if (existing == null) {
             val incident = Incident(
                 state = IncidentState.ACTIVE_INCIDENT,
@@ -74,18 +95,23 @@ class IncidentStateMachine(
             _currentIncident.value = incident
             incidentRepository.saveIncident(incident)
             updateState(IncidentState.ACTIVE_INCIDENT, "ACTIVATE_INCIDENT_DIRECT", incident.incidentId)
+            activatedIncident = incident
         } else {
             if (_currentState.value != IncidentState.ACTIVE_INCIDENT && _currentState.value != IncidentState.SEALED) {
                 val updated = existing.copy(
                     state = IncidentState.ACTIVE_INCIDENT,
                     activatedAt = System.currentTimeMillis(),
-                    triggerSources = existing.triggerSources + triggerSource
+                    triggerSources = if (existing.triggerSources.contains(triggerSource)) existing.triggerSources else existing.triggerSources + triggerSource
                 )
                 _currentIncident.value = updated
                 incidentRepository.saveIncident(updated)
                 updateState(IncidentState.ACTIVE_INCIDENT, "ACTIVATE_INCIDENT", updated.incidentId)
+                activatedIncident = updated
+            } else {
+                activatedIncident = existing
             }
         }
+        onIncidentActivated?.invoke(activatedIncident)
     }
 
     suspend fun cancelIncident() {
@@ -98,12 +124,12 @@ class IncidentStateMachine(
         }
     }
 
-    suspend fun sealIncident(merkleRoot: String) {
+    suspend fun sealIncident(merkleRoot: String, sealedAt: Long = System.currentTimeMillis()) {
         val incident = _currentIncident.value
         if (incident != null && (_currentState.value == IncidentState.ACTIVE_INCIDENT || _currentState.value == IncidentState.CANCELLED)) {
             val updated = incident.copy(
                 state = IncidentState.SEALED,
-                sealedAt = System.currentTimeMillis(),
+                sealedAt = sealedAt,
                 finalMerkleRoot = merkleRoot
             )
             _currentIncident.value = updated
@@ -114,6 +140,7 @@ class IncidentStateMachine(
 
     private suspend fun updateState(newState: IncidentState, action: String, incidentId: UUID? = null) {
         _currentState.value = newState
+        onStateChanged?.invoke(newState)
         _currentIncident.value?.let {
             if (it.state != newState) {
                 val updated = it.copy(state = newState)

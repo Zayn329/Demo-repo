@@ -6,17 +6,69 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import org.sahara.core.domain.models.IncidentState
 import org.sahara.features.incident.statemachine.IncidentStateMachine
+import org.sahara.services.detection.detectors.KeywordDetector
+import org.sahara.services.detection.detectors.MotionDetector
+import org.sahara.services.detection.detectors.ScreamDetector
+import org.sahara.services.detection.fusion.SignalFusionEngine
+import org.sahara.services.detection.models.DetectionConfig
+import org.sahara.services.evidence.engine.EvidenceCaptureEngine
+import org.sahara.services.evidence.preroll.AudioChunk
+import org.sahara.services.evidence.preroll.BoundedAudioPreRollBuffer
 
-class SafetyForegroundService : Service() {
+import org.sahara.core.data.db.SaharaDatabase
+import org.sahara.core.data.repository.AuditRepositoryImpl
+import org.sahara.core.data.repository.IncidentRepositoryImpl
+
+class SafetyForegroundService : Service(), SensorEventListener {
 
     private val binder = LocalBinder()
     var stateMachine: IncidentStateMachine? = null
+
+    // Real audio & sensor detection infrastructure
+    private val detectionConfig = DetectionConfig()
+    val keywordDetector = KeywordDetector(detectionConfig)
+    val screamDetector = ScreamDetector(detectionConfig)
+    val motionDetector = MotionDetector(detectionConfig)
+    val fusionEngine = SignalFusionEngine(detectionConfig)
+    val preRollBuffer = BoundedAudioPreRollBuffer()
+
+    var evidenceCaptureEngine: EvidenceCaptureEngine? = null
+        set(value) {
+            field = value
+            if (value != null) {
+                // Synchronize any pre-existing audio chunks into capture engine buffer
+                for (chunk in preRollBuffer.getBufferedChunks()) {
+                    value.preRollBuffer.offerChunk(chunk)
+                }
+            }
+        }
+
+    private var audioRecord: AudioRecord? = null
+    private var isRecordingAudio = false
+    private var audioRecordingThread: Thread? = null
+    @Volatile private var latestAudioBuffer: ShortArray? = null
+
+    private var sensorManager: SensorManager? = null
+    private var accelerometer: Sensor? = null
+
+    private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
 
     inner class LocalBinder : Binder() {
         fun getService(): SafetyForegroundService = this@SafetyForegroundService
@@ -27,10 +79,187 @@ class SafetyForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+
+        // Initialize TFLite Speech Commands Classifier from application assets
+        try {
+            val speechClassifier = org.sahara.services.detection.tflite.TFLiteSpeechCommandsClassifier(applicationContext)
+            keywordDetector.tfliteClassifier = speechClassifier
+            android.util.Log.d("SaharaDetection", "TFLite Speech Commands Classifier initialized. Loaded=${speechClassifier.isModelLoaded}, Version=${speechClassifier.modelVersion}")
+        } catch (e: Throwable) {
+            android.util.Log.w("SaharaDetection", "Failed to load TFLite Speech Commands Classifier: ${e.message}")
+        }
+
+        // Initialize TFLite Scream Classifier from application assets
+        try {
+            val classifier = org.sahara.services.detection.tflite.TFLiteScreamClassifier(applicationContext)
+            screamDetector.tfliteClassifier = classifier
+            android.util.Log.d("SaharaDetection", "TFLite Scream Classifier initialized. Loaded=${classifier.isModelLoaded}, Version=${classifier.modelVersion}")
+        } catch (e: Throwable) {
+            android.util.Log.w("SaharaDetection", "Failed to load TFLite Scream Classifier, falling back to hybrid DSP mode: ${e.message}")
+        }
+
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        accelerometer?.let {
+            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+
+        startAudioRecording()
+
+        // Launch detection signal collection & fusion processing
+        serviceScope.launch {
+            keywordDetector.detectionFlow.collect { signal ->
+                fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal, latestAudioBuffer)
+            }
+        }
+        serviceScope.launch {
+            screamDetector.detectionFlow.collect { signal ->
+                fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal, latestAudioBuffer)
+            }
+        }
+        serviceScope.launch {
+            motionDetector.detectionFlow.collect { signal ->
+                fusionEngine.onSignalReceived(signal)
+                org.sahara.services.detection.log.DetectionLogManager.logEvent(signal)
+            }
+        }
+
+        // Ensure state machine is initialized for standalone background execution
+        getOrCreateStateMachine()
+
+        // Collect fusion engine decisions and update state machine
+        serviceScope.launch {
+            fusionEngine.decisionFlow.collect { decision ->
+                val activeSm = getOrCreateStateMachine()
+                android.util.Log.d("SaharaDetection", "Fusion decision emitted: $decision")
+                when (decision) {
+                    is org.sahara.services.detection.fusion.FusionDecision.EnterPossibleDistress -> {
+                        activeSm.onSuspiciousSignalDetected(decision.primarySignal.detectorType.name)
+                        activeSm.transitionToCandidate()
+                        updateNotificationForState(IncidentState.CANDIDATE_INCIDENT)
+                    }
+                    is org.sahara.services.detection.fusion.FusionDecision.ConfirmIncident -> {
+                        activeSm.activateIncident(decision.activeSignals.joinToString { it.detectorType.name })
+                        updateNotificationForState(IncidentState.ACTIVE_INCIDENT)
+                    }
+                    is org.sahara.services.detection.fusion.FusionDecision.CandidateExpired -> {
+                        if (activeSm.currentState.value != IncidentState.ACTIVE_INCIDENT && activeSm.currentState.value != IncidentState.SEALED) {
+                            activeSm.cancelIncident()
+                            updateNotificationForState(IncidentState.MONITORING)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Periodic timeout loop to check confirmation window expirations
+        serviceScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                fusionEngine.checkConfirmationTimeout(System.currentTimeMillis())
+            }
+        }
     }
 
+    fun getOrCreateStateMachine(): IncidentStateMachine {
+        if (stateMachine == null) {
+            val db = SaharaDatabase.getDatabase(applicationContext)
+            val incRepo = IncidentRepositoryImpl(db.incidentDao())
+            val auditRepo = AuditRepositoryImpl(db.auditEventDao())
+            stateMachine = IncidentStateMachine(incRepo, auditRepo)
+        }
+        stateMachine?.onStateChanged = { newState ->
+            fusionEngine.updateCurrentState(newState)
+        }
+        return stateMachine!!
+    }
+
+    private fun startAudioRecording() {
+        if (isRecordingAudio) return
+
+        val sampleRate = 16000
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+        val bufferSize = Math.max(minBufferSize, 3200)
+
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                bufferSize
+            )
+
+            if (audioRecord?.state == AudioRecord.STATE_INITIALIZED) {
+                audioRecord?.startRecording()
+                isRecordingAudio = true
+
+                audioRecordingThread = Thread {
+                    val buffer = ShortArray(1600) // 100ms at 16kHz
+                    var chunkIndex = 0
+                    while (isRecordingAudio) {
+                        val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                        if (readSize > 0) {
+                            val chunk = AudioChunk("chunk_${System.currentTimeMillis()}", buffer.clone())
+
+                            // Always populate service preRollBuffer and evidenceCaptureEngine preRollBuffer
+                            preRollBuffer.offerChunk(chunk)
+                            evidenceCaptureEngine?.preRollBuffer?.offerChunk(chunk)
+
+                            latestAudioBuffer = buffer.clone()
+                            val kwConf = keywordDetector.processAudioChunk(buffer, sampleRate)
+                            val screamConf = screamDetector.processAudioChunk(buffer, sampleRate)
+
+                            if (chunkIndex % 50 == 0) { // Log diagnostic summary every ~5 seconds
+                                android.util.Log.d("SaharaDetection", "Audio chunk #$chunkIndex processed. kW_conf=%.2f, scream_conf=%.2f (mode=${screamDetector.modeStatus})".format(kwConf, screamConf))
+                            }
+
+                            // If active incident, save real encrypted chunk
+                            val activeSm = getOrCreateStateMachine()
+                            activeSm.currentIncident.value?.let { incident ->
+                                if (incident.state == IncidentState.ACTIVE_INCIDENT && evidenceCaptureEngine != null) {
+                                    serviceScope.launch {
+                                        try {
+                                            evidenceCaptureEngine?.capturePreRollAndAudioChunk(
+                                                incident.incidentId, chunk, chunkIndex++
+                                            )
+                                        } catch (e: Throwable) {
+                                            // Handle storage/capture error
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                audioRecordingThread?.start()
+            } else {
+                android.util.Log.w("SaharaDetection", "AudioRecord failed to initialize (State != INITIALIZED). Permissions or mic unavailable.")
+            }
+        } catch (e: SecurityException) {
+            android.util.Log.e("SaharaDetection", "SecurityException on AudioRecord: RECORD_AUDIO permission missing or revoked.")
+        } catch (e: Throwable) {
+            android.util.Log.e("SaharaDetection", "Error initializing AudioRecord: ${e.message}")
+        }
+    }
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER) {
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+            motionDetector.processSensorData(x, y, z)
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = createNotification("Sahara Safety Monitoring Active", "Monitoring for potential distress signals...")
+        val notification = createNotification("Sahara Safety Monitoring Active", "Listening for distress keywords, screams, or impacts...")
         startForeground(NOTIFICATION_ID, notification)
         return START_STICKY
     }
@@ -42,7 +271,7 @@ class SafetyForegroundService : Service() {
         when (state) {
             IncidentState.MONITORING -> {
                 title = "Sahara Monitoring Active"
-                content = "Background safety detection is active."
+                content = "Listening for distress keywords, screams, or impacts..."
             }
             IncidentState.CANDIDATE_INCIDENT, IncidentState.PENDING_CONFIRMATION -> {
                 title = "Possible Distress Detected"
@@ -92,6 +321,23 @@ class SafetyForegroundService : Service() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        isRecordingAudio = false
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+        } catch (e: Throwable) {}
+        audioRecord = null
+
+        try {
+            screamDetector.tfliteClassifier?.close()
+            keywordDetector.tfliteClassifier?.close()
+        } catch (_: Throwable) {}
+
+        sensorManager?.unregisterListener(this)
     }
 
     companion object {

@@ -83,7 +83,7 @@ class EvidenceEngineUnitTest {
         val updatedIncident = incidentRepository.getIncidentById(incident.incidentId)
         assertEquals(IncidentState.SEALED, updatedIncident?.state)
 
-        val isValid = EvidenceVerifier.verifyPackageIntegrity(manifest, savedEntries, keyManager)
+        val isValid = EvidenceVerifier.verifyPackageIntegrity(manifest, savedEntries, keyManager, updatedIncident?.state)
         assertTrue("Manifest signature and Merkle root should verify", isValid)
     }
 
@@ -97,8 +97,22 @@ class EvidenceEngineUnitTest {
         val manifest = manifestManager.createAndSignManifest(incident, savedEntries)
 
         val tamperedEntry = entry.copy(sha256 = "tampered_hash_value")
-        val isValid = EvidenceVerifier.verifyPackageIntegrity(manifest, listOf(tamperedEntry), keyManager)
+        val isValid = EvidenceVerifier.verifyPackageIntegrity(manifest, listOf(tamperedEntry), keyManager, IncidentState.SEALED)
 
         assertFalse("Tampered evidence entry must fail integrity verification", isValid)
+    }
+
+    @Test
+    fun testUnsealedOrActiveIncidentFailsVerification() = runBlocking {
+        val activeIncident = Incident(state = IncidentState.ACTIVE_INCIDENT)
+        val entry = captureEngine.capturePreRollAndAudioChunk(activeIncident.incidentId, AudioChunk("c1", ShortArray(100)), 0)
+
+        val isValid = EvidenceVerifier.verifyPackageIntegrity(
+            manifest = null,
+            evidenceEntries = listOf(entry),
+            keyStorageManager = keyManager,
+            incidentState = activeIncident.state
+        )
+        assertFalse("Active/unsealed incident without manifest must fail verification", isValid)
     }
 }

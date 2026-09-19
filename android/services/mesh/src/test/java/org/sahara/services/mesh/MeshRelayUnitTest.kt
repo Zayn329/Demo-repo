@@ -29,7 +29,12 @@ class MeshRelayUnitTest {
         cache = MeshDeduplicationCache(100)
         meshRelay = NearbyConnectionsMeshRelay(cache)
         mockSmsProvider = DemoMockSmsProvider()
-        fallbackManager = EscalationFallbackManager(meshRelay, mockSmsProvider)
+        fallbackManager = EscalationFallbackManager(meshRelay, mockSmsProvider, isDebug = true)
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun testReleaseBuildRejectsMockSmsProvider() {
+        EscalationFallbackManager(meshRelay, DemoMockSmsProvider(), isDebug = false)
     }
 
     @Test
@@ -53,6 +58,26 @@ class MeshRelayUnitTest {
         val maxHopPacket = packet.copy(packetId = UUID.randomUUID().toString(), hopCount = 12, maxHops = 12)
         val hopLimitResult = meshRelay.processIncomingPacket(maxHopPacket)
         assertEquals(MeshRelayResult.HOP_LIMIT_EXCEEDED, hopLimitResult)
+    }
+
+    @Test
+    fun testCacheLruAndTtlEviction() {
+        val lruCache = MeshDeduplicationCache(maxCapacity = 3, ttlMillis = 1000L)
+        lruCache.markSeen("pkt1")
+        lruCache.markSeen("pkt2")
+        lruCache.markSeen("pkt3")
+        assertEquals(3, lruCache.size())
+
+        // Exceeding max capacity should evict LRU (oldest: pkt1)
+        lruCache.markSeen("pkt4")
+        assertEquals(3, lruCache.size())
+        assertTrue("pkt1 should be evicted by LRU sliding window", !lruCache.hasSeen("pkt1"))
+        assertTrue(lruCache.hasSeen("pkt4"))
+
+        // TTL eviction
+        val futureTime = System.currentTimeMillis() + 2000L
+        lruCache.evictExpired(futureTime)
+        assertEquals(0, lruCache.size())
     }
 
     @Test

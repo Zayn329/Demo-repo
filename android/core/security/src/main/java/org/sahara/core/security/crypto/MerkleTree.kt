@@ -11,7 +11,9 @@ object MerkleTree {
     }
 
     fun buildMerkleRoot(leafHashes: List<String>): String {
-        if (leafHashes.isEmpty()) return computeSha256("EMPTY_TREE".toByteArray())
+        require(leafHashes.isNotEmpty()) {
+            "Cannot compute Merkle root for an empty evidence set. At least one evidence chunk is required."
+        }
         if (leafHashes.size == 1) return leafHashes.first()
 
         var currentLevel = leafHashes

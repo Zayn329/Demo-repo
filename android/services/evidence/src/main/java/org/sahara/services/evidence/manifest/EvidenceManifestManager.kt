@@ -6,7 +6,6 @@ import org.sahara.core.domain.models.IncidentState
 import org.sahara.core.domain.repository.IncidentRepository
 import org.sahara.core.security.crypto.KeyStorageManagerImpl
 import org.sahara.core.security.crypto.MerkleTree
-import java.util.UUID
 
 data class EvidenceManifest(
     val incidentId: String,
@@ -28,6 +27,10 @@ class EvidenceManifestManager(
         incident: Incident,
         evidenceEntries: List<EvidenceEntry>
     ): EvidenceManifest {
+        require(evidenceEntries.isNotEmpty()) {
+            "Cannot seal an incident package with zero evidence entries."
+        }
+
         val sortedHashes = evidenceEntries.sortedBy { it.chunkIndex ?: 0 }.map { it.sha256 }
         val merkleRoot = MerkleTree.buildMerkleRoot(sortedHashes)
 
@@ -60,19 +63,52 @@ class EvidenceManifestManager(
 object EvidenceVerifier {
 
     fun verifyPackageIntegrity(
-        manifest: EvidenceManifest,
+        manifest: EvidenceManifest?,
         evidenceEntries: List<EvidenceEntry>,
-        keyStorageManager: KeyStorageManagerImpl
+        keyStorageManager: KeyStorageManagerImpl,
+        incidentState: IncidentState? = null
     ): Boolean {
+        if (manifest == null || evidenceEntries.isEmpty()) {
+            return false
+        }
+
+        if (incidentState != null && incidentState != IncidentState.SEALED && incidentState != IncidentState.EXPORTED) {
+            return false // Active or unsealed incidents must not be verified as sealed packages
+        }
+
+        // Verify physical files on disk against expected SHA-256 hashes
+        for (entry in evidenceEntries) {
+            val file = java.io.File(entry.encryptedPath)
+            if (!file.exists() || !file.isFile) {
+                return false // Missing evidence file on disk
+            }
+            val physicalHash = try {
+                MerkleTree.computeSha256(file.readBytes())
+            } catch (e: Throwable) {
+                return false
+            }
+            if (physicalHash != entry.sha256) {
+                return false // Tampered or corrupted file on disk
+            }
+        }
+
         val sortedHashes = evidenceEntries.sortedBy { it.chunkIndex ?: 0 }.map { it.sha256 }
-        val recomputedMerkleRoot = MerkleTree.buildMerkleRoot(sortedHashes)
+        val recomputedMerkleRoot = try {
+            MerkleTree.buildMerkleRoot(sortedHashes)
+        } catch (e: Throwable) {
+            return false
+        }
 
         if (recomputedMerkleRoot != manifest.merkleRoot) {
             return false
         }
 
         val rawManifestPayload = "${manifest.incidentId}|${manifest.merkleRoot}|${manifest.sealedAt}"
-        val signatureBytes = manifest.signature.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val signatureBytes = try {
+            manifest.signature.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        } catch (e: Throwable) {
+            return false
+        }
 
         return keyStorageManager.verifySignature("manifest_key", rawManifestPayload.toByteArray(), signatureBytes)
     }

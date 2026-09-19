@@ -26,7 +26,9 @@ dependencies {
     implementation(project(":android:core:domain"))
     implementation(project(":android:core:data"))
     implementation(project(":android:services:detection"))
+    implementation(project(":android:services:evidence"))
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.core)
 
